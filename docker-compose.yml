@@ -1,0 +1,14 @@
+services:
+  waha:
+    image: devlikeapro/waha
+    ports:
+      - "3000:3000"
+    volumes:
+      - waha_data:/app/.sessions
+    environment:
+      - WAHA_DEFAULT_SESSION=default
+      - WHATSAPP_DEFAULT_ENGINE=WEBJS
+    restart: unless-stopped
+
+volumes:
+  waha_data:
