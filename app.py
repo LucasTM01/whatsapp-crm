@@ -50,6 +50,35 @@ with st.sidebar:
             st.toast("Desligando WAHA...")
             time.sleep(2)
             st.rerun()
+        if st.button("Resetar sessão", key="btn_reset_waha", use_container_width=True):
+            st.session_state["_confirm_reset"] = True
+        if st.session_state.get("_confirm_reset"):
+            st.warning("Isso desconecta o WhatsApp e exige novo QR code.")
+            col_yes, col_no = st.columns(2)
+            if col_yes.button("Confirmar", key="btn_reset_yes", type="primary", use_container_width=True):
+                st.session_state.pop("_confirm_reset", None)
+                st.session_state.pop("_waha_autostarted", None)
+                with st.spinner("Resetando sessão..."):
+                    subprocess.run(["docker", "compose", "down", "-v"], capture_output=True, cwd=str(PROJECT_ROOT))
+                    result = subprocess.run(
+                        ["docker", "compose", "up", "-d"],
+                        capture_output=True,
+                        text=True,
+                        cwd=str(PROJECT_ROOT),
+                    )
+                    if result.returncode != 0:
+                        st.error("Falha ao reiniciar Docker:")
+                        st.code(result.stderr or result.stdout)
+                        st.stop()
+                    ready_states = {"WORKING", "SCAN_QR_CODE", "STOPPED", "FAILED"}
+                    for _ in range(30):
+                        time.sleep(1)
+                        if check_waha_status().get("status") in ready_states:
+                            break
+                st.rerun()
+            if col_no.button("Cancelar", key="btn_reset_no", use_container_width=True):
+                st.session_state.pop("_confirm_reset", None)
+                st.rerun()
     else:
         # Auto-start Docker/WAHA once per session when unreachable
         if status_label == "UNREACHABLE" and not st.session_state.get("_waha_autostarted"):
