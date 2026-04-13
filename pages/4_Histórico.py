@@ -111,8 +111,19 @@ st.divider()
 # Main table
 # ---------------------------------------------------------------------------
 
+STATUS_DISPLAY = {
+    "sent": "✅ enviado",
+    "failed": "❌ falha",
+    "pending": "⏳ pendente",
+    "dry_run": "🧪 simulado",
+}
+
 if not log_rows:
-    st.info("Nenhum registro encontrado com os filtros selecionados.")
+    any_filter_active = bool(f_client_id or f_date_from or f_status)
+    if any_filter_active:
+        st.info("Nenhum registro encontrado. Tente ajustar os filtros.")
+    else:
+        st.info("Nenhuma mensagem enviada ainda.")
 else:
     display_rows = []
     for r in log_rows:
@@ -120,7 +131,7 @@ else:
             "Data/Hora": to_local(r["sent_at"]) if r.get("sent_at") else "—",
             "Cliente": r.get("client_nome") or "—",
             "Empresa": r.get("client_empresa") or "—",
-            "Status": r["status"],
+            "Status": STATUS_DISPLAY.get(r["status"], r["status"]),
             "Mensagem": r["mensagem"][:120] + ("…" if len(r["mensagem"]) > 120 else ""),
             "Erro": r.get("error_msg") or "",
             "_id": r["id"],
@@ -166,10 +177,9 @@ else:
                 status = entry["status"]
                 icon = {"sent": "✅", "failed": "❌", "pending": "⏳"}.get(status, "📨")
 
-                with st.container():
+                with st.container(border=True):
                     h1, h2 = st.columns([1, 4])
                     h1.caption(f"{icon} {sent_at}")
                     h2.markdown(entry["mensagem"])
                     if entry.get("error_msg"):
                         h2.error(entry["error_msg"])
-                st.divider()

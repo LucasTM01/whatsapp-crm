@@ -1,7 +1,12 @@
 import subprocess
 import time
+from pathlib import Path
 
 import streamlit as st
+
+# Project root — used so docker compose always finds docker-compose.yml
+# regardless of the working directory Streamlit was launched from.
+PROJECT_ROOT = Path(__file__).parent
 
 from core.alerts import get_overdue_clients
 from core.logger import setup_logging
@@ -41,7 +46,7 @@ with st.sidebar:
     if connected:
         st.success("WAHA Conectado")
         if st.button("Desligar WAHA", key="btn_stop_waha", use_container_width=True):
-            subprocess.Popen(["docker", "compose", "stop", "waha"])
+            subprocess.Popen(["docker", "compose", "stop", "waha"], cwd=str(PROJECT_ROOT))
             st.toast("Desligando WAHA...")
             time.sleep(2)
             st.rerun()
@@ -49,7 +54,16 @@ with st.sidebar:
         st.error(f"WAHA: {status_label}")
         if st.button("Ligar WAHA", key="btn_start_waha", type="primary", use_container_width=True):
             with st.spinner("Iniciando WAHA..."):
-                subprocess.run(["docker", "compose", "up", "-d"], capture_output=True)
+                result = subprocess.run(
+                    ["docker", "compose", "up", "-d"],
+                    capture_output=True,
+                    text=True,
+                    cwd=str(PROJECT_ROOT),
+                )
+                if result.returncode != 0:
+                    st.error("Falha ao iniciar Docker:")
+                    st.code(result.stderr or result.stdout or "Sem saída — verifique se o Docker Desktop está aberto.")
+                    st.stop()
                 # Wait up to 30s for WAHA to fully boot (WEBJS engine is slow)
                 ready_states = {"WORKING", "SCAN_QR_CODE", "STOPPED", "FAILED"}
                 for _ in range(30):

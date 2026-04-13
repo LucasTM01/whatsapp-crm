@@ -81,29 +81,28 @@ else:
 # ---------------------------------------------------------------------------
 
 if not clients:
-    st.info("Nenhum cliente encontrado.")
+    if any_filter:
+        st.warning("Nenhum cliente encontrado para os filtros aplicados.")
+    else:
+        st.info("Nenhum cliente cadastrado ainda. Use o formulário abaixo para adicionar.")
 else:
     df = pd.DataFrame(clients)
-    df["tier_display"] = df["tier"].map(TIER_DISPLAY)
 
-    # Columns to show in the editor (edit-safe subset)
+    # Columns to show in the editor — single Tier column (no redundant star display)
     editable_cols = ["nome", "whatsapp", "email", "empresa", "tickers", "tipo", "tier", "freq_dias", "notas"]
-    display_cols = ["tier_display"] + editable_cols
-    hidden_cols = [c for c in df.columns if c not in display_cols + ["id"]]
 
     edited_df = st.data_editor(
-        df[display_cols],
+        df[editable_cols],
         use_container_width=True,
         num_rows="fixed",
         column_config={
-            "tier_display": st.column_config.TextColumn("Tier", disabled=True),
             "nome": st.column_config.TextColumn("Nome", required=True),
             "whatsapp": st.column_config.TextColumn("WhatsApp", help="Formato: 5511999999999"),
             "email": st.column_config.TextColumn("Email"),
             "empresa": st.column_config.TextColumn("Empresa"),
             "tickers": st.column_config.TextColumn("Tickers", help="Separados por vírgula: EMBR3,WEGE3"),
             "tipo": st.column_config.SelectboxColumn("Tipo", options=TIPO_OPTIONS[1:]),
-            "tier": st.column_config.SelectboxColumn("Tier (num)", options=TIER_OPTIONS),
+            "tier": st.column_config.SelectboxColumn("Tier", options=TIER_OPTIONS),
             "freq_dias": st.column_config.NumberColumn("Freq. (dias)", min_value=1, max_value=365),
             "notas": st.column_config.TextColumn("Notas"),
         },
@@ -111,7 +110,7 @@ else:
     )
 
     # Detect and persist edits
-    orig_df = df[display_cols].reset_index(drop=True)
+    orig_df = df[editable_cols].reset_index(drop=True)
     new_df = edited_df.reset_index(drop=True)
 
     if not new_df.equals(orig_df):
@@ -130,18 +129,19 @@ else:
         st.cache_data.clear()
         st.rerun()
 
-    # Archive buttons
-    st.markdown("**Arquivar cliente:**")
-    archive_cols = st.columns(min(len(clients), 6))
-    for i, client in enumerate(clients):
-        col = archive_cols[i % len(archive_cols)]
-        if col.button(f"🗄️ {client['nome'][:15]}", key=f"archive_{client['id']}", help="Arquivar (não exclui)"):
-            conn = get_conn()
-            archive_client(conn, client["id"])
-            conn.close()
-            st.cache_data.clear()
-            st.success(f"{client['nome']} arquivado.")
-            st.rerun()
+    # Archive section — clean per-row layout inside an expander
+    with st.expander("🗄️ Arquivar clientes"):
+        st.caption("Arquivar remove o cliente das listas e do dashboard, mas não apaga seus dados.")
+        for client in clients:
+            a1, a2 = st.columns([5, 1])
+            a1.markdown(f"**{client['nome']}** — {client.get('empresa') or '—'} &nbsp; {TIER_DISPLAY.get(client.get('tier', 2), '')}")
+            if a2.button("Arquivar", key=f"archive_{client['id']}", use_container_width=True):
+                conn = get_conn()
+                archive_client(conn, client["id"])
+                conn.close()
+                st.cache_data.clear()
+                st.success(f"{client['nome']} arquivado.")
+                st.rerun()
 
 st.divider()
 

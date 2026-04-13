@@ -132,7 +132,7 @@ with right:
         with act2:
             with st.popover("🗑️ Excluir lista"):
                 st.warning(f"Excluir **{sel_list['nome']}**? Esta ação não pode ser desfeita.")
-                if st.button("Confirmar exclusão", type="primary", key=f"confirm_del_{sel_id}"):
+                if st.button("🗑️ Sim, excluir lista", type="primary", key=f"confirm_del_{sel_id}"):
                     conn = get_conn()
                     delete_list(conn, sel_id)
                     conn.close()
@@ -165,9 +165,5 @@ with right:
             st.cache_data.clear()
             st.rerun()
 
-        # Show current members as tags
-        if current_members:
-            tags = " ".join(f"`{c['nome']}`" for c in current_members)
-            st.markdown(tags)
-        else:
+        if not current_members:
             st.caption("Nenhum membro nesta lista.")

@@ -68,9 +68,10 @@ with left:
 
     # Variable insertion buttons — MUST come before text_area to allow
     # appending to session_state.composer_template before rendering the widget.
+    st.caption("Inserir variável:")
     var_cols = st.columns(len(VARIABLES))
     for i, var in enumerate(VARIABLES):
-        if var_cols[i].button(var, key=f"var_btn_{i}", help=f"Inserir {var}"):
+        if var_cols[i].button(var, key=f"var_btn_{i}", help=f"Clique para inserir {var} na mensagem", use_container_width=True):
             st.session_state.composer_template += var
             st.rerun()
 
@@ -236,6 +237,13 @@ with ctrl3:
         key="send_button",
         use_container_width=True,
     )
+    if send_disabled and not st.session_state.composer_sending:
+        if len(st.session_state.composer_recipients) == 0:
+            st.caption("⚠️ Adicione destinatários para enviar.")
+        elif not st.session_state.composer_template.strip():
+            st.caption("⚠️ Escreva uma mensagem para enviar.")
+        elif not waha_ok and not dry_run:
+            st.caption("⚠️ WAHA desconectado. Ative o Dry Run ou conecte o WAHA.")
 
 if send_clicked:
     st.session_state.composer_sending = True
@@ -293,13 +301,14 @@ if st.session_state.composer_results:
         m1.metric("Enviados", ok)
         m2.metric("Falhas", err)
 
+    STATUS_DISPLAY = {"ok": "✅ enviado", "error": "❌ falha", "dry_run": "🧪 simulado"}
     rows = []
     for r in results:
         rows.append({
             "Nome": r["client"]["nome"],
             "Número": r["client"]["whatsapp"],
-            "Status": r["status"],
-            "Mensagem enviada": r["message"][:80] + ("…" if len(r["message"]) > 80 else ""),
+            "Status": STATUS_DISPLAY.get(r["status"], r["status"]),
+            "Mensagem enviada": r["message"],
             "Erro": r.get("error", ""),
         })
     st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
