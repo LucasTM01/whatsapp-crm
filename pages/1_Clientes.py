@@ -108,6 +108,12 @@ if not clients:
 else:
     df = pd.DataFrame(clients)
 
+    # Sanitize integer columns — coerce any corrupt/non-numeric values to None
+    # so the data_editor never receives a stray bytes/string in a NumberColumn.
+    for int_col in ("freq_dias", "tier"):
+        if int_col in df.columns:
+            df[int_col] = pd.to_numeric(df[int_col], errors="coerce")
+
     # Columns to show in the editor — single Tier column (no redundant star display)
     editable_cols = ["nome", "whatsapp", "email", "empresa", "tickers", "tipo", "tier", "freq_dias", "notas"]
 
@@ -148,6 +154,13 @@ else:
                 if changed:
                     if "whatsapp" in changed:
                         changed["whatsapp"] = normalize_phone(str(changed["whatsapp"]))
+                    # Coerce integer fields so pandas floats/objects never reach SQLite
+                    for int_col in ("freq_dias", "tier"):
+                        if int_col in changed and changed[int_col] is not None:
+                            try:
+                                changed[int_col] = int(changed[int_col])
+                            except (ValueError, TypeError):
+                                changed[int_col] = None
                     update_client(conn, client_id, changed)
         conn.close()
         st.cache_data.clear()
