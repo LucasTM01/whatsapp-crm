@@ -104,8 +104,14 @@ with st.sidebar:
         st.error(f"WAHA: {status_label}")
         if st.button("Ligar WAHA", key="btn_start_waha", type="primary", use_container_width=True):
             with st.spinner("Iniciando WAHA..."):
+                # FAILED = container running but session crashed → restart it
+                # UNREACHABLE/other = container not running → bring it up
+                if status_label == "FAILED":
+                    cmd = ["docker", "compose", "restart", "waha"]
+                else:
+                    cmd = ["docker", "compose", "up", "-d"]
                 result = subprocess.run(
-                    ["docker", "compose", "up", "-d"],
+                    cmd,
                     capture_output=True,
                     text=True,
                     cwd=str(PROJECT_ROOT),
