@@ -17,9 +17,26 @@ from db.queries import (
 st.set_page_config(page_title="Clientes", page_icon="👥", layout="wide")
 st.title("Clientes")
 
-TIER_DISPLAY = {1: "★★★ Tier 1", 2: "★★ Tier 2", 3: "★ Tier 3"}
-TIER_OPTIONS = [1, 2, 3]
+TIER_DISPLAY = {
+    1: "★★★ Tier 1",
+    2: "★★ Tier 2",
+    3: "★ Tier 3",
+    4: "Tier 4",
+    5: "Tier 5",
+    6: "Tier 6",
+}
+TIER_OPTIONS = [1, 2, 3, 4, 5, 6]
 TIPO_OPTIONS = ["", "buy-side", "family office", "hedge fund", "private bank", "other"]
+
+
+def _vals_differ(a, b) -> bool:
+    """NaN-safe value comparison for data_editor change detection."""
+    if pd.isna(a) and pd.isna(b):
+        return False
+    try:
+        return bool(a != b)
+    except Exception:
+        return True
 
 
 # ---------------------------------------------------------------------------
@@ -48,20 +65,22 @@ def _load_lists():
 
 with st.sidebar:
     st.markdown("### Filtros")
-    f_tier = st.selectbox("Tier", options=[None, 1, 2, 3], format_func=lambda x: "Todos" if x is None else TIER_DISPLAY[x])
+    f_tier = st.selectbox("Tier", options=[None] + TIER_OPTIONS, format_func=lambda x: "Todos" if x is None else TIER_DISPLAY.get(x, str(x)))
     f_tipo = st.selectbox("Tipo", options=[""] + TIPO_OPTIONS[1:], format_func=lambda x: "Todos" if x == "" else x)
     f_ticker = st.text_input("Ticker", placeholder="ex: EMBR3")
     lists = _load_lists()
     list_map = {lst["nome"]: lst["id"] for lst in lists}
     f_list_name = st.selectbox("Lista", options=[""] + list(list_map.keys()), format_func=lambda x: "Todas" if x == "" else x)
     f_list_id = list_map.get(f_list_name) if f_list_name else None
+    empresas = sorted({c["empresa"] for c in _load_clients() if c.get("empresa")})
+    f_empresa = st.selectbox("Empresa", options=[""] + empresas, format_func=lambda x: "Todas" if x == "" else x)
 
 
 # ---------------------------------------------------------------------------
 # Load + filter clients
 # ---------------------------------------------------------------------------
 
-any_filter = f_tier or f_tipo or f_ticker or f_list_id
+any_filter = f_tier or f_tipo or f_ticker or f_list_id or f_empresa
 if any_filter:
     conn = get_conn()
     clients = get_clients_by_filters(
@@ -70,6 +89,7 @@ if any_filter:
         tier=f_tier,
         ticker=f_ticker or None,
         list_id=f_list_id,
+        empresa=f_empresa or None,
     )
     conn.close()
 else:
@@ -120,7 +140,11 @@ else:
             row_new = new_df.iloc[idx]
             if not row_new.equals(row_orig):
                 client_id = int(df.iloc[idx]["id"])
-                changed = {k: row_new[k] for k in editable_cols if row_new[k] != row_orig.get(k)}
+                changed = {
+                    k: (None if pd.isna(row_new[k]) else row_new[k])
+                    for k in editable_cols
+                    if _vals_differ(row_new[k], row_orig.get(k))
+                }
                 if changed:
                     if "whatsapp" in changed:
                         changed["whatsapp"] = normalize_phone(str(changed["whatsapp"]))
@@ -158,7 +182,7 @@ with st.expander("+ Novo cliente"):
         empresa = c2.text_input("Empresa")
         tickers = c1.text_input("Tickers", placeholder="EMBR3,WEGE3")
         tipo = c2.selectbox("Tipo", options=TIPO_OPTIONS[1:])
-        tier = c1.selectbox("Tier", options=TIER_OPTIONS, format_func=lambda x: TIER_DISPLAY[x], index=1)
+        tier = c1.selectbox("Tier", options=TIER_OPTIONS, format_func=lambda x: TIER_DISPLAY.get(x, str(x)), index=1)
         freq_dias = c2.number_input("Frequência (dias)", min_value=1, max_value=365, value=30)
         notas = st.text_area("Notas")
 

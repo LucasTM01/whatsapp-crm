@@ -179,7 +179,7 @@ else:
     for client in overdue:
         with st.container():
             c1, c2, c3, c4 = st.columns([3, 2, 1, 1])
-            tier_map = {1: "★★★", 2: "★★", 3: "★"}
+            tier_map = {1: "★★★", 2: "★★", 3: "★", 4: "", 5: "", 6: ""}
             tier_str = tier_map.get(client.get("tier", 2), "★★")
 
             c1.markdown(f"**{client['nome']}** — {client.get('empresa') or '—'}")

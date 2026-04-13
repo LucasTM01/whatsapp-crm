@@ -82,6 +82,7 @@ def get_clients_by_filters(
     tier: int | None = None,
     ticker: str | None = None,
     list_id: int | None = None,
+    empresa: str | None = None,
 ) -> list[dict]:
     conditions = ["c.ativo = 1"]
     params: list = []
@@ -98,6 +99,9 @@ def get_clients_by_filters(
     if list_id:
         conditions.append("EXISTS (SELECT 1 FROM client_list cl WHERE cl.client_id = c.id AND cl.list_id = ?)")
         params.append(list_id)
+    if empresa:
+        conditions.append("c.empresa = ?")
+        params.append(empresa)
 
     where = " AND ".join(conditions)
     sql = f"SELECT c.* FROM clients c WHERE {where} ORDER BY c.tier ASC, c.nome ASC"
