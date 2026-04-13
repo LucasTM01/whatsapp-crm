@@ -233,3 +233,108 @@ with st.expander("+ Novo cliente"):
                             st.error(f"Erro: {exc}")
                     finally:
                         conn.close()
+
+
+# ---------------------------------------------------------------------------
+# Import clients from Excel
+# ---------------------------------------------------------------------------
+
+with st.expander("📥 Importar via Excel"):
+    st.caption(
+        "Faça upload de um arquivo .xlsx com uma aba. "
+        "Os nomes das colunas são reconhecidos sem distinção de maiúsculas/minúsculas. "
+        "Colunas ausentes são preenchidas com vazio. "
+        "Colunas obrigatórias: **nome**, **whatsapp**."
+    )
+    uploaded = st.file_uploader("Selecione o arquivo .xlsx", type=["xlsx"], key="excel_uploader")
+    if uploaded:
+        df_raw = pd.read_excel(uploaded, sheet_name=0, dtype=str)
+
+        # Normalise column headers: strip, lowercase, spaces → underscore
+        rename_map = {}
+        for col in df_raw.columns:
+            normalised = col.strip().lower().replace(" ", "_")
+            rename_map[col] = normalised
+        df_raw = df_raw.rename(columns=rename_map)
+
+        st.caption(f"{len(df_raw)} linha(s) encontrada(s). Preview (5 primeiras):")
+        st.dataframe(df_raw.head(), use_container_width=True, hide_index=True)
+
+        if st.button("Importar clientes", key="import_excel_btn", type="primary"):
+            imported, skipped = 0, []
+            conn = get_conn()
+            try:
+                for i, row in df_raw.iterrows():
+                    def _get(field, _row=row):
+                        val = _row.get(field, None)
+                        if val is None or (isinstance(val, float) and pd.isna(val)):
+                            return None
+                        s = str(val).strip()
+                        return s if s else None
+
+                    nome_val = _get("nome")
+                    whatsapp_val = _get("whatsapp")
+
+                    if not nome_val:
+                        skipped.append(f"Linha {i + 2}: nome ausente")
+                        continue
+                    if not whatsapp_val:
+                        skipped.append(f"Linha {i + 2} ({nome_val}): whatsapp ausente")
+                        continue
+
+                    phone = normalize_phone(whatsapp_val)
+                    if len(phone) < 10 or len(phone) > 13:
+                        skipped.append(f"Linha {i + 2} ({nome_val}): número inválido '{phone}'")
+                        continue
+
+                    # tier: int 1-6, default 2
+                    tier_raw = _get("tier")
+                    try:
+                        tier_int = int(float(tier_raw)) if tier_raw else 2
+                        if tier_int not in range(1, 7):
+                            tier_int = 2
+                    except (ValueError, TypeError):
+                        tier_int = 2
+
+                    # freq_dias: int, default 30
+                    freq_raw = _get("freq_dias")
+                    try:
+                        freq_int = int(float(freq_raw)) if freq_raw else 30
+                    except (ValueError, TypeError):
+                        freq_int = 30
+
+                    # tipo: validate against known options
+                    tipo_raw = _get("tipo")
+                    valid_tipos = [t.lower() for t in TIPO_OPTIONS if t]
+                    tipo_val = tipo_raw if tipo_raw and tipo_raw.lower() in valid_tipos else None
+
+                    tickers_raw = _get("tickers")
+                    tickers_val = tickers_raw.upper() if tickers_raw else None
+
+                    try:
+                        create_client(conn, {
+                            "nome": nome_val,
+                            "whatsapp": phone,
+                            "email": _get("email"),
+                            "empresa": _get("empresa"),
+                            "tickers": tickers_val,
+                            "tipo": tipo_val,
+                            "tier": tier_int,
+                            "freq_dias": freq_int,
+                            "notas": _get("notas"),
+                        })
+                        imported += 1
+                    except Exception as exc:
+                        if "UNIQUE" in str(exc):
+                            skipped.append(f"Linha {i + 2} ({nome_val}): número duplicado")
+                        else:
+                            skipped.append(f"Linha {i + 2} ({nome_val}): {exc}")
+            finally:
+                conn.close()
+
+            st.cache_data.clear()
+            st.success(f"{imported} cliente(s) importado(s) com sucesso.")
+            if skipped:
+                st.warning("Linhas ignoradas:\n" + "\n".join(f"• {s}" for s in skipped))
+            if imported:
+                st.rerun()

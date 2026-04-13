@@ -8,4 +8,5 @@ dependencies = [
     "pandas",
     "structlog",
     "tzdata",
+    "openpyxl>=3.1.5",
 ]

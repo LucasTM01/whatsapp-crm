@@ -1,7 +1,7 @@
 import pandas as pd
 import streamlit as st
 
-from core.sender import check_waha_status, send_bulk
+from core.sender import check_waha_status, normalize_phone, send_bulk
 from core.templates import VARIABLES, get_preview
 from db import get_conn
 from db.queries import (
@@ -116,7 +116,7 @@ with right:
     all_clients = _load_clients()
     client_fmt = lambda c: f"{c['nome']} — {c.get('empresa') or '—'}"
 
-    tab1, tab2, tab3, tab4 = st.tabs(["Por Lista", "Individual", "Por Filtro", "Exclusão"])
+    tab1, tab2, tab3, tab4, tab5 = st.tabs(["Por Lista", "Individual", "Por Filtro", "Exclusão", "Via Excel"])
 
     with tab1:
         if not lists:
@@ -203,6 +203,83 @@ with right:
         if st.button("Aplicar exclusão", key="apply_exclusao_btn", type="primary"):
             st.session_state.composer_recipients = final_exclusao
             st.rerun()
+
+    with tab5:
+        with st.expander("ℹ️ Como montar a planilha", expanded=False):
+            st.markdown(
+                """
+**Formato esperado (.xlsx, uma aba):**
+
+| nome | whatsapp |
+|------|----------|
+| João Silva | 5511999990001 |
+| Maria Souza | 5521988880002 |
+
+**Regras:**
+- Os nomes das colunas podem estar em qualquer capitalização (`Nome`, `NOME`, `nome` — tudo funciona).
+- **`nome`** — nome completo do contato. `{nome}` na mensagem usa o **primeiro nome** automaticamente.
+- **`whatsapp`** — número completo no formato internacional, sem `+` ou espaços: `5511999999999`.
+  Números brasileiros com 11 dígitos recebem `55` automaticamente se necessário.
+- Outras colunas na planilha são ignoradas.
+- Contatos com número inválido ou nome ausente são pulados e exibidos como aviso.
+                """
+            )
+
+        st.caption("Faça upload de um .xlsx com colunas **nome** e **whatsapp**.")
+        excel_file = st.file_uploader(
+            "Selecionar planilha",
+            type=["xlsx"],
+            key="composer_excel_uploader",
+        )
+
+        if excel_file:
+            df_xl = pd.read_excel(excel_file, sheet_name=0, dtype=str)
+
+            # Normalise headers: strip, lowercase, spaces → underscore
+            df_xl = df_xl.rename(columns={c: c.strip().lower().replace(" ", "_") for c in df_xl.columns})
+
+            errors = []
+            recipients_xl = []
+            for i, row in df_xl.iterrows():
+                def _v(field, _r=row):
+                    val = _r.get(field)
+                    if val is None or (isinstance(val, float) and pd.isna(val)):
+                        return None
+                    s = str(val).strip()
+                    return s if s else None
+
+                nome_xl = _v("nome")
+                wa_xl = _v("whatsapp")
+
+                if not nome_xl:
+                    errors.append(f"Linha {i + 2}: nome ausente — pulado")
+                    continue
+                if not wa_xl:
+                    errors.append(f"Linha {i + 2} ({nome_xl}): whatsapp ausente — pulado")
+                    continue
+
+                phone_xl = normalize_phone(wa_xl)
+                if len(phone_xl) < 10 or len(phone_xl) > 13:
+                    errors.append(f"Linha {i + 2} ({nome_xl}): número inválido '{phone_xl}' — pulado")
+                    continue
+
+                recipients_xl.append({
+                    "id": None,           # not a DB client
+                    "nome": nome_xl,
+                    "whatsapp": phone_xl,
+                    "empresa": None,
+                    "tickers": None,
+                    "tier": None,
+                })
+
+            st.caption(f"{len(recipients_xl)} contato(s) válido(s) encontrado(s).")
+            if errors:
+                st.warning("Avisos:\n" + "\n".join(f"• {e}" for e in errors))
+
+            if recipients_xl:
+                if st.button("Usar esta planilha", key="use_excel_btn", type="primary"):
+                    st.session_state.composer_recipients = recipients_xl
+                    st.rerun()
 
     st.divider()
 
@@ -291,8 +368,8 @@ if send_clicked:
                 f"{result['index'] + 1}/{result['total']} — {result['client']['nome']} — {result['status']}"
             )
 
-            # Log to DB (skip for dry_run)
-            if not dry_run:
+            # Log to DB (skip for dry_run and Excel-only recipients with no DB id)
+            if not dry_run and result["client"].get("id") is not None:
                 log_message(
                     conn,
                     client_id=result["client"]["id"],
