@@ -49,7 +49,7 @@ with st.expander("Filtros", expanded=True):
     f_client_name = f1.selectbox(
         "Cliente",
         options=list(client_name_map.keys()),
-        format_func=lambda x: client_name_map_display(x, client_name_map),
+        format_func=lambda x: "Todos os clientes" if x == "" else x,
         key="hist_client",
     )
     f_client_id = client_name_map.get(f_client_name) if f_client_name else None
@@ -76,12 +76,6 @@ with st.expander("Filtros", expanded=True):
             if k in st.session_state:
                 del st.session_state[k]
         st.rerun()
-
-
-def client_name_map_display(x, mapping):
-    if x == "":
-        return "Todos os clientes"
-    return x
 
 
 # ---------------------------------------------------------------------------

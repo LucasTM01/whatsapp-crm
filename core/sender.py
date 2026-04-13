@@ -10,6 +10,8 @@ from core.templates import render
 
 WAHA_BASE = "http://localhost:3000"
 SESSION = "default"
+API_KEY = "whatsapp-crm-local-key"
+_HEADERS = {"X-Api-Key": API_KEY}
 
 _log = get_logger(__name__)
 
@@ -29,19 +31,28 @@ def check_waha_status() -> dict:
     Never raises — WAHA being unreachable is a normal operational state.
     """
     try:
-        resp = httpx.get(f"{WAHA_BASE}/api/sessions/{SESSION}", timeout=5)
+        resp = httpx.get(f"{WAHA_BASE}/api/sessions/{SESSION}", headers=_HEADERS, timeout=10)
+        # 404 = session being created by WHATSAPP_START_SESSION env var
+        if resp.status_code == 404:
+            return {"status": "STARTING", "connected": False}
         resp.raise_for_status()
-        data = resp.json()
+        try:
+            data = resp.json()
+        except ValueError:
+            return {"status": "STARTING", "connected": False}
         status = data.get("status", "UNKNOWN")
         connected = status == "WORKING"
         return {"status": status, "connected": connected, **data}
     except httpx.ConnectError:
         return {"status": "UNREACHABLE", "connected": False}
+    except httpx.RemoteProtocolError:
+        # "Server disconnected without sending a response" — still booting
+        return {"status": "STARTING", "connected": False}
     except httpx.HTTPStatusError as exc:
         return {"status": f"HTTP_{exc.response.status_code}", "connected": False}
     except Exception as exc:
         _log.warning("waha_status_error", error=str(exc))
-        return {"status": "ERROR", "connected": False}
+        return {"status": "STARTING", "connected": False}
 
 
 def send_message(phone: str, text: str) -> dict:
@@ -54,22 +65,22 @@ def send_message(phone: str, text: str) -> dict:
         "chatId": f"{phone}@c.us",
         "text": text,
     }
-    resp = httpx.post(f"{WAHA_BASE}/api/sendText", json=payload, timeout=30)
+    resp = httpx.post(f"{WAHA_BASE}/api/sendText", json=payload, headers=_HEADERS, timeout=30)
     resp.raise_for_status()
     return resp.json()
 
 
-def get_qr_code() -> str | None:
-    """GET /api/screenshot — returns base64 PNG bytes if session needs QR scan, else None."""
+def get_qr_code() -> bytes | None:
+    """GET /api/{SESSION}/auth/qr — returns raw PNG bytes if session needs QR scan, else None."""
     try:
-        status = check_waha_status()
-        if status.get("status") not in ("SCAN_QR_CODE", "STARTING"):
+        resp = httpx.get(f"{WAHA_BASE}/api/{SESSION}/auth/qr", headers=_HEADERS, timeout=10)
+        if resp.status_code != 200:
             return None
-        resp = httpx.get(f"{WAHA_BASE}/api/screenshot", timeout=10)
-        resp.raise_for_status()
-        # WAHA returns the image directly as binary PNG
-        import base64
-        return base64.b64encode(resp.content).decode("utf-8")
+        content = resp.content
+        # Verify it looks like a PNG (magic bytes: \x89PNG)
+        if len(content) < 4 or content[:4] != b"\x89PNG":
+            return None
+        return content
     except Exception as exc:
         _log.warning("qr_code_error", error=str(exc))
         return None

@@ -20,8 +20,11 @@ Strip any non-digit characters on input. Brazilian mobile numbers (11 digits) ge
 ## WAHA API
 Base URL: http://localhost:3000
 Session name: "default"
-Docs: http://localhost:3000/docs (Swagger UI available when container is running)
+API key: `whatsapp-crm-local-key` (set via WAHA_API_KEY in docker-compose.yml)
+All requests must include header: `X-Api-Key: whatsapp-crm-local-key`
+Docs: http://localhost:3000/dashboard (username: admin, check container logs for password)
 chatId format for individuals: `{phone}@c.us` (e.g. `5511999999999@c.us`)
+Auto-start session: `WHATSAPP_START_SESSION=default` env var in docker-compose.yml
 
 ## Template variables
 {nome} → first name only (split on space, take first word)

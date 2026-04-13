@@ -1,4 +1,3 @@
-import base64
 import subprocess
 import time
 
@@ -51,18 +50,23 @@ with st.sidebar:
         if st.button("Ligar WAHA", key="btn_start_waha", type="primary", use_container_width=True):
             with st.spinner("Iniciando WAHA..."):
                 subprocess.run(["docker", "compose", "up", "-d"], capture_output=True)
-                # Wait up to 15s for WAHA to become reachable
-                for _ in range(15):
+                # Wait up to 30s for WAHA to fully boot (WEBJS engine is slow)
+                ready_states = {"WORKING", "SCAN_QR_CODE", "STOPPED", "FAILED"}
+                for _ in range(30):
                     time.sleep(1)
-                    if check_waha_status().get("status") != "UNREACHABLE":
+                    if check_waha_status().get("status") in ready_states:
                         break
             st.rerun()
 
-        if status_label not in ("UNREACHABLE", "UNKNOWN"):
+        if status_label == "SCAN_QR_CODE":
             qr = get_qr_code()
             if qr:
                 st.markdown("**Escaneie para conectar:**")
-                st.image(base64.b64decode(qr), use_container_width=True)
+                st.image(qr)
+            else:
+                st.info("Aguardando QR code...")
+        elif status_label == "STARTING":
+            st.info("WAHA iniciando...")
 
     st.divider()
 

@@ -6,8 +6,9 @@ services:
     volumes:
       - waha_data:/app/.sessions
     environment:
-      - WAHA_DEFAULT_SESSION=default
+      - WHATSAPP_START_SESSION=default
       - WHATSAPP_DEFAULT_ENGINE=WEBJS
+      - WAHA_API_KEY=whatsapp-crm-local-key
     restart: unless-stopped
 
 volumes:
