@@ -1,0 +1,5 @@
+crm.db
+.venv/
+__pycache__/
+*.pyc
+.idea/

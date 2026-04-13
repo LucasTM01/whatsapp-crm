@@ -51,6 +51,27 @@ with st.sidebar:
             time.sleep(2)
             st.rerun()
     else:
+        # Auto-start Docker/WAHA once per session when unreachable
+        if status_label == "UNREACHABLE" and not st.session_state.get("_waha_autostarted"):
+            st.session_state["_waha_autostarted"] = True
+            with st.spinner("Iniciando WAHA..."):
+                result = subprocess.run(
+                    ["docker", "compose", "up", "-d"],
+                    capture_output=True,
+                    text=True,
+                    cwd=str(PROJECT_ROOT),
+                )
+                if result.returncode != 0:
+                    st.error("Falha ao iniciar Docker:")
+                    st.code(result.stderr or result.stdout or "Sem saída — verifique se o Docker Desktop está aberto.")
+                else:
+                    ready_states = {"WORKING", "SCAN_QR_CODE", "STOPPED", "FAILED"}
+                    for _ in range(30):
+                        time.sleep(1)
+                        if check_waha_status().get("status") in ready_states:
+                            break
+            st.rerun()
+
         st.error(f"WAHA: {status_label}")
         if st.button("Ligar WAHA", key="btn_start_waha", type="primary", use_container_width=True):
             with st.spinner("Iniciando WAHA..."):
