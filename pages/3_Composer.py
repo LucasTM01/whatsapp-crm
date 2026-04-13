@@ -370,12 +370,14 @@ if send_clicked:
 
             # Log to DB (skip for dry_run and Excel-only recipients with no DB id)
             if not dry_run and result["client"].get("id") is not None:
+                # send_bulk yields "ok" on success; store as "sent" to match DB conventions
+                db_status = "sent" if result["status"] == "ok" else result["status"]
                 log_message(
                     conn,
                     client_id=result["client"]["id"],
                     mensagem=result["message"],
                     template=template,
-                    status=result["status"],
+                    status=db_status,
                     error_msg=result.get("error"),
                 )
     finally:

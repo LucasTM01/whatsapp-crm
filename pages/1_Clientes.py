@@ -11,6 +11,7 @@ from db.queries import (
     get_all_clients,
     get_all_lists,
     get_clients_by_filters,
+    get_last_contact_per_client,
     update_client,
 )
 
@@ -114,11 +115,30 @@ else:
         if int_col in df.columns:
             df[int_col] = pd.to_numeric(df[int_col], errors="coerce")
 
+    # Last contact — not cached because it changes every send
+    from datetime import datetime, timezone as _tz
+    conn_lc = get_conn()
+    try:
+        _last_contacts = get_last_contact_per_client(conn_lc)
+    finally:
+        conn_lc.close()
+
+    def _parse_ts(ts_str):
+        if not ts_str:
+            return None
+        try:
+            return datetime.fromisoformat(ts_str).replace(tzinfo=_tz.utc)
+        except Exception:
+            return None
+
+    df["ultimo_contato"] = df["id"].map(lambda cid: _parse_ts(_last_contacts.get(cid)))
+
     # Columns to show in the editor — single Tier column (no redundant star display)
     editable_cols = ["nome", "whatsapp", "email", "empresa", "tickers", "tipo", "tier", "freq_dias", "notas"]
+    display_cols = editable_cols + ["ultimo_contato"]
 
     edited_df = st.data_editor(
-        df[editable_cols],
+        df[display_cols],
         use_container_width=True,
         num_rows="fixed",
         column_config={
@@ -131,13 +151,19 @@ else:
             "tier": st.column_config.SelectboxColumn("Tier", options=TIER_OPTIONS),
             "freq_dias": st.column_config.NumberColumn("Freq. (dias)", min_value=1, max_value=365),
             "notas": st.column_config.TextColumn("Notas"),
+            "ultimo_contato": st.column_config.DatetimeColumn(
+                "Último Contato",
+                format="DD/MM/YYYY HH:mm",
+                timezone="America/Sao_Paulo",
+                disabled=True,
+            ),
         },
         key="clients_editor",
     )
 
-    # Detect and persist edits
+    # Detect and persist edits — compare only editable columns, not read-only ones
     orig_df = df[editable_cols].reset_index(drop=True)
-    new_df = edited_df.reset_index(drop=True)
+    new_df = edited_df[editable_cols].reset_index(drop=True)
 
     if not new_df.equals(orig_df):
         conn = get_conn()
