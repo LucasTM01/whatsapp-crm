@@ -15,7 +15,10 @@ from db.queries import (
 st.set_page_config(page_title="Composer", page_icon="✉️", layout="wide")
 st.title("Composer")
 
-TIER_DISPLAY = {1: "★★★ Tier 1", 2: "★★ Tier 2", 3: "★ Tier 3"}
+TIER_DISPLAY = {
+    1: "★★★ Tier 1", 2: "★★ Tier 2", 3: "★ Tier 3",
+    4: "Tier 4", 5: "Tier 5", 6: "Tier 6",
+}
 TIPO_OPTIONS = ["buy-side", "family office", "hedge fund", "private bank", "other"]
 
 
@@ -113,7 +116,7 @@ with right:
     all_clients = _load_clients()
     client_fmt = lambda c: f"{c['nome']} — {c.get('empresa') or '—'}"
 
-    tab1, tab2, tab3 = st.tabs(["Por Lista", "Individual", "Por Filtro"])
+    tab1, tab2, tab3, tab4 = st.tabs(["Por Lista", "Individual", "Por Filtro", "Exclusão"])
 
     with tab1:
         if not lists:
@@ -131,10 +134,18 @@ with right:
             list_clients = get_clients_by_list(conn, sel_list_id)
             conn.close()
 
-            st.caption(f"{len(list_clients)} clientes nesta lista")
+            excluded_from_list = st.multiselect(
+                "Excluir da lista (exceções)",
+                options=list_clients,
+                format_func=client_fmt,
+                key="composer_list_exclude",
+            )
+            excluded_ids = {c["id"] for c in excluded_from_list}
+            final_list_clients = [c for c in list_clients if c["id"] not in excluded_ids]
+            st.caption(f"{len(final_list_clients)} de {len(list_clients)} clientes selecionados")
 
             if st.button("Usar esta lista", key="use_list_btn", type="primary"):
-                st.session_state.composer_recipients = list_clients
+                st.session_state.composer_recipients = final_list_clients
                 st.rerun()
 
     with tab2:
@@ -153,8 +164,8 @@ with right:
     with tab3:
         f_tier = st.selectbox(
             "Tier",
-            options=[None, 1, 2, 3],
-            format_func=lambda x: "Todos" if x is None else TIER_DISPLAY[x],
+            options=[None, 1, 2, 3, 4, 5, 6],
+            format_func=lambda x: "Todos" if x is None else TIER_DISPLAY.get(x, str(x)),
             key="composer_f_tier",
         )
         f_tipo = st.selectbox(
@@ -175,6 +186,22 @@ with right:
             )
             conn.close()
             st.session_state.composer_recipients = filtered
+            st.rerun()
+
+    with tab4:
+        st.caption(f"{len(all_clients)} clientes ativos no total")
+        excluded_clients = st.multiselect(
+            "Clientes a excluir",
+            options=all_clients,
+            format_func=client_fmt,
+            key="composer_exclusao_sel",
+        )
+        excluded_ex_ids = {c["id"] for c in excluded_clients}
+        final_exclusao = [c for c in all_clients if c["id"] not in excluded_ex_ids]
+        st.caption(f"Serão enviados: {len(final_exclusao)} de {len(all_clients)} clientes")
+
+        if st.button("Aplicar exclusão", key="apply_exclusao_btn", type="primary"):
+            st.session_state.composer_recipients = final_exclusao
             st.rerun()
 
     st.divider()
