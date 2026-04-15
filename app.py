@@ -1,3 +1,5 @@
+import platform
+import shutil
 import subprocess
 import time
 from pathlib import Path
@@ -32,12 +34,106 @@ initialize()
 
 
 # ---------------------------------------------------------------------------
+# Docker helpers
+# ---------------------------------------------------------------------------
+
+def _check_docker_installed() -> bool:
+    """Return True if the docker CLI binary is available in PATH."""
+    return shutil.which("docker") is not None
+
+
+def _check_docker_running() -> bool:
+    """Return True if the Docker daemon responds to 'docker info'."""
+    try:
+        result = subprocess.run(
+            ["docker", "info"],
+            capture_output=True,
+            timeout=8,
+        )
+        return result.returncode == 0
+    except Exception:
+        return False
+
+
+def _start_docker() -> bool:
+    """Attempt to launch Docker Desktop (Windows/macOS) or the daemon (Linux).
+
+    Returns True if a launch command was successfully issued (daemon may still
+    be starting — caller must poll _check_docker_running() to confirm).
+    """
+    system = platform.system()
+    try:
+        if system == "Windows":
+            candidates = [
+                Path(r"C:\Program Files\Docker\Docker\Docker Desktop.exe"),
+                Path(r"C:\Program Files (x86)\Docker\Docker\Docker Desktop.exe"),
+                Path.home() / "AppData" / "Local" / "Docker" / "Docker Desktop.exe",
+            ]
+            for exe in candidates:
+                if exe.exists():
+                    subprocess.Popen(
+                        [str(exe)],
+                        creationflags=subprocess.CREATE_NO_WINDOW,
+                    )
+                    return True
+            # Fallback: ask the Windows shell to find and launch Docker Desktop
+            subprocess.Popen('start "" "Docker Desktop"', shell=True)
+            return True
+        elif system == "Darwin":  # macOS
+            subprocess.Popen(["open", "-a", "Docker"])
+            return True
+        elif system == "Linux":
+            result = subprocess.run(
+                ["systemctl", "start", "docker"],
+                capture_output=True,
+                timeout=15,
+            )
+            return result.returncode == 0
+    except Exception:
+        pass
+    return False
+
+
+# ---------------------------------------------------------------------------
 # Sidebar — WAHA status + overdue badge
 # ---------------------------------------------------------------------------
 
 with st.sidebar:
     st.markdown("## WhatsApp CRM")
     st.divider()
+
+    # ── Docker health check ───────────────────────────────────────────────
+    if not _check_docker_installed():
+        st.error(
+            "**Docker não encontrado.**\n\n"
+            "Instale o Docker Desktop para usar o WhatsApp CRM:\n\n"
+            "👉 [docker.com/products/docker-desktop](https://www.docker.com/products/docker-desktop)"
+        )
+        st.stop()
+
+    if not _check_docker_running():
+        if not st.session_state.get("_docker_start_attempted"):
+            st.session_state["_docker_start_attempted"] = True
+            with st.spinner("Docker não está rodando — tentando iniciar..."):
+                launched = _start_docker()
+                if launched:
+                    # Wait up to 60 s for the daemon to become ready
+                    for _ in range(60):
+                        time.sleep(1)
+                        if _check_docker_running():
+                            break
+            st.rerun()
+        else:
+            st.error(
+                "**Docker Desktop não está rodando.**\n\n"
+                "Abra o Docker Desktop manualmente, aguarde o ícone ficar estável "
+                "e recarregue a página."
+            )
+            st.stop()
+    else:
+        # Docker is confirmed running — reset flag so we retry if it stops later
+        st.session_state.pop("_docker_start_attempted", None)
+    # ── end Docker check ──────────────────────────────────────────────────
 
     waha = check_waha_status()
     connected = waha.get("connected", False)
