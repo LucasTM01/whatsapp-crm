@@ -19,7 +19,6 @@ TIER_DISPLAY = {
     1: "★★★ Tier 1", 2: "★★ Tier 2", 3: "★ Tier 3",
     4: "Tier 4", 5: "Tier 5", 6: "Tier 6",
 }
-TIPO_OPTIONS = ["buy-side", "family office", "hedge fund", "private bank", "other"]
 
 
 # ---------------------------------------------------------------------------
@@ -170,12 +169,7 @@ with right:
             format_func=lambda x: "Todos" if x is None else TIER_DISPLAY.get(x, str(x)),
             key="composer_f_tier",
         )
-        f_tipo = st.selectbox(
-            "Tipo",
-            options=[""] + TIPO_OPTIONS,
-            format_func=lambda x: "Todos" if x == "" else x,
-            key="composer_f_tipo",
-        )
+        f_tipo = st.text_input("Cargo", placeholder="ex: Analista, PM, Head...", key="composer_f_tipo")
         f_ticker = st.text_input("Ticker", placeholder="ex: WEGE3", key="composer_f_ticker")
 
         if st.button("Aplicar filtro", key="apply_filter_btn"):

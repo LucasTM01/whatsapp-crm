@@ -28,7 +28,6 @@ TIER_DISPLAY = {
     6: "Tier 6",
 }
 TIER_OPTIONS = [1, 2, 3, 4, 5, 6]
-TIPO_OPTIONS = ["", "buy-side", "family office", "hedge fund", "private bank", "other"]
 
 
 def _vals_differ(a, b) -> bool:
@@ -68,7 +67,7 @@ def _load_lists():
 with st.sidebar:
     st.markdown("### Filtros")
     f_tier = st.selectbox("Tier", options=[None] + TIER_OPTIONS, format_func=lambda x: "Todos" if x is None else TIER_DISPLAY.get(x, str(x)))
-    f_tipo = st.selectbox("Tipo", options=[""] + TIPO_OPTIONS[1:], format_func=lambda x: "Todos" if x == "" else x)
+    f_tipo = st.text_input("Cargo", placeholder="ex: Analista, PM, Head...")
     f_ticker = st.text_input("Ticker", placeholder="ex: EMBR3")
     lists = _load_lists()
     list_map = {lst["nome"]: lst["id"] for lst in lists}
@@ -147,7 +146,7 @@ else:
             "email": st.column_config.TextColumn("Email"),
             "empresa": st.column_config.TextColumn("Empresa"),
             "tickers": st.column_config.TextColumn("Tickers", help="Separados por vírgula: EMBR3,WEGE3"),
-            "tipo": st.column_config.SelectboxColumn("Tipo", options=TIPO_OPTIONS[1:]),
+            "tipo": st.column_config.TextColumn("Cargo", help="ex: Analista, PM, Head..."),
             "tier": st.column_config.SelectboxColumn("Tier", options=TIER_OPTIONS),
             "freq_dias": st.column_config.NumberColumn("Freq. (dias)", min_value=1, max_value=365),
             "notas": st.column_config.TextColumn("Notas"),
@@ -236,7 +235,7 @@ with st.expander("+ Novo cliente"):
         email = c1.text_input("Email")
         empresa = c2.text_input("Empresa")
         tickers = c1.text_input("Tickers", placeholder="EMBR3,WEGE3")
-        tipo = c2.selectbox("Tipo", options=TIPO_OPTIONS[1:])
+        tipo = c2.text_input("Cargo", placeholder="ex: Analista, PM, Head...")
         tier = c1.selectbox("Tier", options=TIER_OPTIONS, format_func=lambda x: TIER_DISPLAY.get(x, str(x)), index=1)
         freq_dias = c2.number_input("Frequência (dias)", min_value=1, max_value=365, value=30)
         notas = st.text_area("Notas")
@@ -345,10 +344,8 @@ with st.expander("📥 Importar via Excel"):
                     except (ValueError, TypeError):
                         freq_int = 30
 
-                    # tipo: validate against known options
-                    tipo_raw = _get("tipo")
-                    valid_tipos = [t.lower() for t in TIPO_OPTIONS if t]
-                    tipo_val = tipo_raw if tipo_raw and tipo_raw.lower() in valid_tipos else None
+                    # tipo (cargo): free text — accept any value from the spreadsheet
+                    tipo_val = _get("tipo")
 
                     tickers_raw = _get("tickers")
                     tickers_val = tickers_raw.upper() if tickers_raw else None
