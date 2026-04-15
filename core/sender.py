@@ -17,9 +17,9 @@ _log = get_logger(__name__)
 
 
 def normalize_phone(raw: str) -> str:
-    """Strip non-digits; prepend 55 if 11 digits (Brazilian DDD+number)."""
+    """Strip non-digits; prepend 55 for Brazilian numbers (10 or 11 digits)."""
     digits = re.sub(r"\D", "", raw)
-    if len(digits) == 11:
+    if len(digits) in (10, 11):
         digits = "55" + digits
     return digits
 

@@ -90,7 +90,7 @@ def get_clients_by_filters(
     if tipo:
         conditions.append("c.tipo = ?")
         params.append(tipo)
-    if tier:
+    if tier is not None:
         conditions.append("c.tier = ?")
         params.append(tier)
     if ticker:
@@ -190,7 +190,7 @@ def get_message_log(
     """
     params: list = []
 
-    if client_id:
+    if client_id is not None:
         sql += " AND ml.client_id = ?"
         params.append(client_id)
     if date_from:

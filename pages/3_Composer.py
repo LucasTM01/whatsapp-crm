@@ -131,8 +131,10 @@ with right:
             sel_list_id = list_options[sel_list_name]
 
             conn = get_conn()
-            list_clients = get_clients_by_list(conn, sel_list_id)
-            conn.close()
+            try:
+                list_clients = get_clients_by_list(conn, sel_list_id)
+            finally:
+                conn.close()
 
             excluded_from_list = st.multiselect(
                 "Excluir da lista (exceções)",
@@ -233,10 +235,13 @@ with right:
         )
 
         if excel_file:
-            df_xl = pd.read_excel(excel_file, sheet_name=0, dtype=str)
-
-            # Normalise headers: strip, lowercase, spaces → underscore
-            df_xl = df_xl.rename(columns={c: c.strip().lower().replace(" ", "_") for c in df_xl.columns})
+            # Cache the parsed DataFrame in session state to avoid re-parsing on every rerun
+            xl_cache_key = f"_xl_parsed_{excel_file.name}_{excel_file.size}"
+            if xl_cache_key not in st.session_state:
+                df_raw_xl = pd.read_excel(excel_file, sheet_name=0, dtype=str)
+                df_raw_xl = df_raw_xl.rename(columns={c: c.strip().lower().replace(" ", "_") for c in df_raw_xl.columns})
+                st.session_state[xl_cache_key] = df_raw_xl
+            df_xl = st.session_state[xl_cache_key]
 
             errors = []
             recipients_xl = []

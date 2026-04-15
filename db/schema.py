@@ -48,6 +48,9 @@ CREATE INDEX IF NOT EXISTS idx_message_log_sent_at
 
 CREATE INDEX IF NOT EXISTS idx_clients_ativo
     ON clients(ativo);
+
+CREATE INDEX IF NOT EXISTS idx_message_log_client_status
+    ON message_log(client_id, status);
 """
 
 

@@ -20,7 +20,7 @@ def to_local(utc_str: str) -> str:
         local = dt.astimezone(SAO_PAULO)
         return local.strftime("%d/%m/%Y %H:%M")
     except Exception:
-        return utc_str
+        return "—"
 
 
 # ---------------------------------------------------------------------------
@@ -43,18 +43,16 @@ with st.expander("Filtros", expanded=True):
     f1, f2, f3, f4 = st.columns([2, 2, 2, 1])
 
     all_clients = _load_clients()
-    client_name_map = {"": "Todos os clientes"}
-    client_name_map.update({c["nome"]: c["id"] for c in all_clients})
+    # Use ID as key to avoid collisions when two clients share the same name
+    client_id_options = [None] + [c["id"] for c in all_clients]
+    client_label_map = {c["id"]: f"{c['nome']} ({c.get('empresa') or '—'})" for c in all_clients}
 
-    f_client_name = f1.selectbox(
+    f_client_id = f1.selectbox(
         "Cliente",
-        options=list(client_name_map.keys()),
-        format_func=lambda x: "Todos os clientes" if x == "" else x,
+        options=client_id_options,
+        format_func=lambda x: "Todos os clientes" if x is None else client_label_map.get(x, str(x)),
         key="hist_client",
     )
-    f_client_id = client_name_map.get(f_client_name) if f_client_name else None
-    if isinstance(f_client_id, str):  # "Todos os clientes" placeholder
-        f_client_id = None
 
     date_range = f2.date_input(
         "Período",
@@ -66,7 +64,7 @@ with st.expander("Filtros", expanded=True):
 
     f_status = f3.selectbox(
         "Status",
-        options=["", "sent", "failed", "pending", "dry_run"],
+        options=["", "sent", "error", "pending", "dry_run"],
         format_func=lambda x: "Todos" if x == "" else x,
         key="hist_status",
     )
@@ -98,7 +96,7 @@ conn.close()
 
 total = len(log_rows)
 sent = sum(1 for r in log_rows if r["status"] == "sent")
-failed = sum(1 for r in log_rows if r["status"] == "failed")
+failed = sum(1 for r in log_rows if r["status"] == "error")
 
 m1, m2, m3 = st.columns(3)
 m1.metric("Total de registros", total)
@@ -113,13 +111,13 @@ st.divider()
 
 STATUS_DISPLAY = {
     "sent": "✅ enviado",
-    "failed": "❌ falha",
+    "error": "❌ falha",
     "pending": "⏳ pendente",
     "dry_run": "🧪 simulado",
 }
 
 if not log_rows:
-    any_filter_active = bool(f_client_id or f_date_from or f_status)
+    any_filter_active = bool(f_client_id is not None or f_date_from or f_status)
     if any_filter_active:
         st.info("Nenhum registro encontrado. Tente ajustar os filtros.")
     else:
@@ -175,7 +173,7 @@ else:
             for entry in sorted(client_logs, key=lambda x: x.get("sent_at", ""), reverse=False):
                 sent_at = to_local(entry["sent_at"]) if entry.get("sent_at") else "—"
                 status = entry["status"]
-                icon = {"sent": "✅", "failed": "❌", "pending": "⏳"}.get(status, "📨")
+                icon = {"sent": "✅", "error": "❌", "pending": "⏳"}.get(status, "📨")
 
                 with st.container(border=True):
                     h1, h2 = st.columns([1, 4])

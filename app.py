@@ -140,9 +140,13 @@ with st.sidebar:
 
     st.divider()
 
+    # Sidebar overdue badge — loaded here, reused in main body below
     conn = get_conn()
-    overdue = get_overdue_clients(conn)
-    conn.close()
+    try:
+        overdue = get_overdue_clients(conn)
+    finally:
+        conn.close()
+    st.session_state["_dashboard_overdue"] = overdue
 
     if overdue:
         st.warning(f"⚠️ **{len(overdue)}** contato(s) em atraso")
@@ -157,11 +161,15 @@ with st.sidebar:
 st.title("Dashboard")
 
 conn = get_conn()
-all_clients = get_all_clients(conn)
-all_lists = get_all_lists(conn)
-msgs_month = get_messages_this_month(conn)
-overdue = get_overdue_clients(conn)
-conn.close()
+try:
+    all_clients = get_all_clients(conn)
+    all_lists = get_all_lists(conn)
+    msgs_month = get_messages_this_month(conn)
+finally:
+    conn.close()
+
+# Reuse the overdue list computed in sidebar — avoids a second query
+overdue = st.session_state.get("_dashboard_overdue", [])
 
 col1, col2, col3 = st.columns(3)
 col1.metric("Clientes Ativos", len(all_clients))

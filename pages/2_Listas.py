@@ -134,8 +134,10 @@ with right:
                 st.warning(f"Excluir **{sel_list['nome']}**? Esta ação não pode ser desfeita.")
                 if st.button("🗑️ Sim, excluir lista", type="primary", key=f"confirm_del_{sel_id}"):
                     conn = get_conn()
-                    delete_list(conn, sel_id)
-                    conn.close()
+                    try:
+                        delete_list(conn, sel_id)
+                    finally:
+                        conn.close()
                     st.session_state.selected_list_id = None
                     st.cache_data.clear()
                     st.rerun()
@@ -144,8 +146,10 @@ with right:
 
         # Members multiselect
         conn = get_conn()
-        current_members = get_list_members(conn, sel_id)
-        conn.close()
+        try:
+            current_members = get_list_members(conn, sel_id)
+        finally:
+            conn.close()
         current_ids = [c["id"] for c in current_members]
 
         st.markdown(f"**Membros** ({len(current_ids)} clientes)")
@@ -160,8 +164,10 @@ with right:
 
         if set(selected_ids) != set(current_ids):
             conn = get_conn()
-            set_list_members(conn, sel_id, selected_ids)
-            conn.close()
+            try:
+                set_list_members(conn, sel_id, selected_ids)
+            finally:
+                conn.close()
             st.cache_data.clear()
             st.rerun()
 

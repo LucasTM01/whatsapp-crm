@@ -1,4 +1,5 @@
 import re
+from datetime import datetime, timezone as _tz
 
 import pandas as pd
 import streamlit as st
@@ -116,7 +117,6 @@ else:
             df[int_col] = pd.to_numeric(df[int_col], errors="coerce")
 
     # Last contact — not cached because it changes every send
-    from datetime import datetime, timezone as _tz
     conn_lc = get_conn()
     try:
         _last_contacts = get_last_contact_per_client(conn_lc)
@@ -167,28 +167,40 @@ else:
 
     if not new_df.equals(orig_df):
         conn = get_conn()
-        for idx in range(len(new_df)):
-            row_orig = orig_df.iloc[idx]
-            row_new = new_df.iloc[idx]
-            if not row_new.equals(row_orig):
-                client_id = int(df.iloc[idx]["id"])
-                changed = {
-                    k: (None if pd.isna(row_new[k]) else row_new[k])
-                    for k in editable_cols
-                    if _vals_differ(row_new[k], row_orig.get(k))
-                }
-                if changed:
-                    if "whatsapp" in changed:
-                        changed["whatsapp"] = normalize_phone(str(changed["whatsapp"]))
-                    # Coerce integer fields so pandas floats/objects never reach SQLite
-                    for int_col in ("freq_dias", "tier"):
-                        if int_col in changed and changed[int_col] is not None:
-                            try:
-                                changed[int_col] = int(changed[int_col])
-                            except (ValueError, TypeError):
-                                changed[int_col] = None
-                    update_client(conn, client_id, changed)
-        conn.close()
+        update_errors = []
+        try:
+            for idx in range(len(new_df)):
+                row_orig = orig_df.iloc[idx]
+                row_new = new_df.iloc[idx]
+                if not row_new.equals(row_orig):
+                    client_id = int(df.iloc[idx]["id"])
+                    changed = {
+                        k: (None if pd.isna(row_new[k]) else row_new[k])
+                        for k in editable_cols
+                        if _vals_differ(row_new[k], row_orig.get(k))
+                    }
+                    if changed:
+                        if "whatsapp" in changed:
+                            changed["whatsapp"] = normalize_phone(str(changed["whatsapp"]))
+                        # Coerce integer fields so pandas floats/objects never reach SQLite
+                        for int_col in ("freq_dias", "tier"):
+                            if int_col in changed and changed[int_col] is not None:
+                                try:
+                                    changed[int_col] = int(changed[int_col])
+                                except (ValueError, TypeError):
+                                    changed[int_col] = None
+                        try:
+                            update_client(conn, client_id, changed)
+                        except Exception as exc:
+                            if "UNIQUE" in str(exc):
+                                update_errors.append(f"WhatsApp já cadastrado: {changed.get('whatsapp', '')}")
+                            else:
+                                update_errors.append(f"Erro ao salvar cliente: {exc}")
+        finally:
+            conn.close()
+        if update_errors:
+            for msg in update_errors:
+                st.error(msg)
         st.cache_data.clear()
         st.rerun()
 
@@ -200,10 +212,14 @@ else:
             a1.markdown(f"**{client['nome']}** — {client.get('empresa') or '—'} &nbsp; {TIER_DISPLAY.get(client.get('tier', 2), '')}")
             if a2.button("Arquivar", key=f"archive_{client['id']}", use_container_width=True):
                 conn = get_conn()
-                archive_client(conn, client["id"])
-                conn.close()
-                st.cache_data.clear()
-                st.success(f"{client['nome']} arquivado.")
+                try:
+                    archive_client(conn, client["id"])
+                    st.cache_data.clear()
+                    st.success(f"{client['nome']} arquivado.")
+                except Exception as exc:
+                    st.error(f"Erro ao arquivar: {exc}")
+                finally:
+                    conn.close()
                 st.rerun()
 
 st.divider()
