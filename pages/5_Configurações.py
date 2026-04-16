@@ -101,6 +101,8 @@ if submitted:
                             )
                         finally:
                             conn.close()
+                        for w in result.get("warnings", []):
+                            st.warning(w)
                         st.success(
                             f"Databases configurados.\n\n"
                             f"- Clientes: `{result['clients_db_id']}`\n"
@@ -152,7 +154,7 @@ if saved_token and saved_clients_db:
     col_pull, col_push = st.columns(2)
 
     with col_pull:
-        if st.button("Pull do Notion", use_container_width=True, type="primary"):
+        if st.button("⬇️ Pull do Notion", use_container_width=True, type="primary"):
             with st.spinner("Puxando dados do Notion..."):
                 conn = get_conn()
                 try:
@@ -166,14 +168,14 @@ if saved_token and saved_clients_db:
                 f"**{stats['skipped']}** ignorados."
             )
             if stats["errors"]:
-                with st.expander(f"Erros ({len(stats['errors'])})"):
-                    for err in stats["errors"]:
-                        st.text(err)
+                st.error(f"{len(stats['errors'])} erro(s) no pull:")
+                for err in stats["errors"]:
+                    st.text(err)
 
             st.cache_data.clear()
 
     with col_push:
-        if st.button("Push para Notion", use_container_width=True):
+        if st.button("⬆️ Push para Notion", use_container_width=True):
             with st.spinner("Enviando dados para o Notion..."):
                 conn = get_conn()
                 try:
@@ -181,10 +183,78 @@ if saved_token and saved_clients_db:
                 finally:
                     conn.close()
 
-            st.success(f"Push concluído: **{stats['created']}** criados no Notion.")
+            if stats["created"] > 0:
+                st.success(
+                    f"Push concluído: **{stats['created']}** criado(s) no Notion "
+                    f"| {stats['skipped']} já sincronizado(s)."
+                )
+            elif not stats["errors"]:
+                st.info(
+                    f"Nenhum cliente novo para enviar. "
+                    f"**{stats['skipped']}** de **{stats['total']}** já estão no Notion."
+                )
+
             if stats["errors"]:
-                with st.expander(f"Erros ({len(stats['errors'])})"):
-                    for err in stats["errors"]:
-                        st.text(err)
+                st.error(f"{len(stats['errors'])} erro(s) no push:")
+                for err in stats["errors"]:
+                    st.text(err)
 
             st.cache_data.clear()
+
+
+# ---------------------------------------------------------------------------
+# Maintenance
+# ---------------------------------------------------------------------------
+
+if saved_token:
+    st.divider()
+    st.caption("🔧 Manutenção de schema")
+
+    col_reinit, col_clear = st.columns(2)
+
+    with col_reinit:
+        reinit_disabled = not saved_parent
+        if st.button(
+            "Reinicializar schemas no Notion",
+            use_container_width=True,
+            disabled=reinit_disabled,
+            help="Requer ID da página pai" if reinit_disabled else "Adiciona colunas faltantes aos databases existentes",
+        ):
+            with st.spinner("Atualizando schemas..."):
+                try:
+                    conn = get_conn()
+                    try:
+                        result = initialize_notion_databases(
+                            conn,
+                            saved_token,
+                            saved_parent,
+                            clients_db_id=saved_clients_db or None,
+                            meetings_db_id=saved_meetings_db or None,
+                        )
+                    finally:
+                        conn.close()
+                    for w in result.get("warnings", []):
+                        st.warning(w)
+                    st.success(
+                        f"Schemas atualizados.\n\n"
+                        f"- Clientes: `{result['clients_db_id']}`\n"
+                        f"- Reuniões: `{result['meetings_db_id']}`"
+                    )
+                    st.rerun()
+                except Exception as exc:
+                    st.error(f"Erro ao reinicializar schemas: {exc}")
+
+    with col_clear:
+        if st.button(
+            "🗑️ Limpar IDs de databases salvos",
+            use_container_width=True,
+            help="Use isto se os databases foram deletados do Notion e você quer recriar do zero",
+        ):
+            conn = get_conn()
+            try:
+                set_setting(conn, "notion_clients_db_id", None)
+                set_setting(conn, "notion_meetings_db_id", None)
+            finally:
+                conn.close()
+            st.success("IDs limpos. Preencha a página pai e clique em Salvar para recriar os databases.")
+            st.rerun()

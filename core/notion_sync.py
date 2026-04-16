@@ -37,7 +37,8 @@ PROPERTY_MAP = {
     "notas":     ("Notas",      "rich_text"),
 }
 
-# Notion property schema definitions for database creation
+# Notion property schema definitions for Clientes database
+# "Name" is the default title property created by databases.create — we keep it.
 _PROPERTY_SCHEMAS = {
     "Name":       {"title": {}},
     "WhatsApp":   {"rich_text": {}},
@@ -48,6 +49,15 @@ _PROPERTY_SCHEMAS = {
     "Tier":       {"number": {}},
     "Frequência": {"number": {}},
     "Notas":      {"rich_text": {}},
+}
+
+# Notion property schema definitions for Reuniões database
+# "Contatos" is the title/index field (Atr1). Created by renaming default "Name".
+_MEETINGS_PROPERTY_SCHEMAS = {
+    "Contatos":       {"title": {}},       # Atr1 — index (renamed from default "Name")
+    "Data":           {"date": {}},        # Atr2
+    "Empresas":       {"rich_text": {}},   # Atr3
+    "Bloco de notas": {"rich_text": {}},   # Atr4 — free-text block
 }
 
 
@@ -71,6 +81,53 @@ def _retry_on_429(fn, *args, **kwargs):
 
 def _get_client(token: str) -> Client:
     return Client(auth=token)
+
+
+def _extract_datasource_id(db_obj: dict) -> str | None:
+    """Extract the primary data_source_id from a databases.create/retrieve response.
+
+    In Notion API v3, databases embed a 'data_sources' array where each element
+    has its own 'id'. This id is what must be passed to all data_sources.*
+    endpoints — it is DIFFERENT from the database's own 'id'.
+    """
+    sources = db_obj.get("data_sources", [])
+    return sources[0]["id"] if sources else None
+
+
+def _get_datasource_id(client: Client, database_id: str) -> str:
+    """Retrieve a database by its ID and return its primary data_source_id."""
+    db = _retry_on_429(client.databases.retrieve, database_id=database_id)
+    ds_id = _extract_datasource_id(db)
+    if not ds_id:
+        raise ValueError(f"No data_sources found for database {database_id}")
+    return ds_id
+
+
+def _update_db_properties(
+    client: Client,
+    database_id: str,
+    properties: dict,
+    db_obj: dict | None = None,
+) -> None:
+    """Add/update properties on a database via data_sources.update.
+
+    In notion-client >= 3.0, databases.update no longer accepts 'properties'.
+    Schema changes must go through data_sources.update with the data_source_id
+    (which is DIFFERENT from the database_id).
+
+    Pass db_obj to reuse an already-retrieved database response and avoid an
+    extra API call.
+    """
+    if db_obj is None:
+        db_obj = _retry_on_429(client.databases.retrieve, database_id=database_id)
+    ds_id = _extract_datasource_id(db_obj)
+    if not ds_id:
+        raise ValueError(f"No data_sources found for database {database_id}")
+    _retry_on_429(
+        client.data_sources.update,
+        data_source_id=ds_id,
+        properties=properties,
+    )
 
 
 def _build_notion_properties(client_row: dict) -> dict:
@@ -154,66 +211,104 @@ def initialize_notion_databases(
 ) -> dict:
     """Check/create Clients and Meetings databases in Notion.
 
-    Returns {"clients_db_id": str, "meetings_db_id": str}.
+    In notion-client >= 3.0:
+    - databases.create() no longer accepts 'properties' (silently dropped).
+    - Schema must be applied via data_sources.update(data_source_id=...) where
+      data_source_id comes from db_obj["data_sources"][0]["id"], NOT the database id.
+
+    Stale/deleted DB IDs are caught and replaced with freshly created databases.
+
+    Returns {"clients_db_id": str, "meetings_db_id": str, "warnings": list[str]}.
     """
     client = _get_client(token)
+    warnings: list[str] = []
 
     # --- Clients database ---
     if clients_db_id:
-        # Validate and add missing properties
-        db = _retry_on_429(client.databases.retrieve, database_id=clients_db_id)
-        existing = set(db.get("properties", {}).keys())
-        missing_props = {}
-        for notion_name, schema in _PROPERTY_SCHEMAS.items():
-            if notion_name not in existing:
-                missing_props[notion_name] = schema
-        if missing_props:
-            _retry_on_429(
-                client.databases.update,
-                database_id=clients_db_id,
-                properties=missing_props,
+        try:
+            db = _retry_on_429(client.databases.retrieve, database_id=clients_db_id)
+            existing = set(db.get("properties", {}).keys())
+            missing_props = {k: v for k, v in _PROPERTY_SCHEMAS.items() if k not in existing}
+            if missing_props:
+                _update_db_properties(client, clients_db_id, missing_props, db_obj=db)
+                _log.info("notion_clients_db_updated", added=list(missing_props.keys()))
+            else:
+                _log.info("notion_clients_db_validated", db_id=clients_db_id)
+        except APIResponseError:
+            _log.warning("notion_clients_db_stale", db_id=clients_db_id)
+            warnings.append(
+                f"Database de Clientes antigo não encontrado ({clients_db_id}) — "
+                "um novo foi criado automaticamente."
             )
-            _log.info("notion_clients_db_updated", added=list(missing_props.keys()))
-    else:
-        # Create new Clients database
+            clients_db_id = None  # fall through to creation
+
+    if not clients_db_id:
+        # Step 1: create bare database (SDK v3 drops 'properties' kwarg silently)
         new_db = _retry_on_429(
             client.databases.create,
             parent={"type": "page_id", "page_id": parent_page_id},
             title=[{"type": "text", "text": {"content": "Clientes"}}],
-            properties=_PROPERTY_SCHEMAS,
         )
         clients_db_id = new_db["id"]
+        # Step 2: apply full schema via data_sources.update using the data_source_id
+        # from the create response — no extra retrieve needed.
+        non_title = {k: v for k, v in _PROPERTY_SCHEMAS.items() if "title" not in v}
+        _update_db_properties(client, clients_db_id, non_title, db_obj=new_db)
         _log.info("notion_clients_db_created", db_id=clients_db_id)
 
     set_setting(conn, "notion_clients_db_id", clients_db_id)
 
     # --- Meetings database ---
     if meetings_db_id:
-        _retry_on_429(client.databases.retrieve, database_id=meetings_db_id)
-        _log.info("notion_meetings_db_validated", db_id=meetings_db_id)
-    else:
-        meetings_props = {
-            "Nome": {"title": {}},
-            "Contatos": {
-                "relation": {
-                    "database_id": clients_db_id,
-                },
-            },
-            "Data": {"date": {}},
-            "Empresas": {"rich_text": {}},
-        }
+        try:
+            db = _retry_on_429(client.databases.retrieve, database_id=meetings_db_id)
+            existing = set(db.get("properties", {}).keys())
+            props_to_update: dict = {}
+            # Rename the default "Name" title → "Contatos" if not done yet
+            if "Name" in existing and "Contatos" not in existing:
+                props_to_update["Name"] = {"name": "Contatos", "title": {}}
+            # Add any missing non-title columns
+            for k, v in _MEETINGS_PROPERTY_SCHEMAS.items():
+                if k not in existing and "title" not in v:
+                    props_to_update[k] = v
+            if props_to_update:
+                _update_db_properties(client, meetings_db_id, props_to_update, db_obj=db)
+                _log.info("notion_meetings_db_updated", added=list(props_to_update.keys()))
+            else:
+                _log.info("notion_meetings_db_validated", db_id=meetings_db_id)
+        except APIResponseError:
+            _log.warning("notion_meetings_db_stale", db_id=meetings_db_id)
+            warnings.append(
+                f"Database de Reuniões antigo não encontrado ({meetings_db_id}) — "
+                "um novo foi criado automaticamente."
+            )
+            meetings_db_id = None  # fall through to creation
+
+    if not meetings_db_id:
+        # Step 1: create bare database
         new_db = _retry_on_429(
             client.databases.create,
             parent={"type": "page_id", "page_id": parent_page_id},
             title=[{"type": "text", "text": {"content": "Reuniões"}}],
-            properties=meetings_props,
         )
         meetings_db_id = new_db["id"]
+        # Step 2: rename default "Name" → "Contatos" AND add other columns in one call
+        meetings_update = {
+            "Name":           {"name": "Contatos", "title": {}},  # rename default title
+            "Data":           {"date": {}},
+            "Empresas":       {"rich_text": {}},
+            "Bloco de notas": {"rich_text": {}},
+        }
+        _update_db_properties(client, meetings_db_id, meetings_update, db_obj=new_db)
         _log.info("notion_meetings_db_created", db_id=meetings_db_id)
 
     set_setting(conn, "notion_meetings_db_id", meetings_db_id)
 
-    return {"clients_db_id": clients_db_id, "meetings_db_id": meetings_db_id}
+    return {
+        "clients_db_id": clients_db_id,
+        "meetings_db_id": meetings_db_id,
+        "warnings": warnings,
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -232,14 +327,27 @@ def pull_from_notion(
     """
     client = _get_client(token)
     stats = {"created": 0, "updated": 0, "skipped": 0, "errors": []}
+
+    # In notion-client >= 3.0, databases.query was removed.
+    # Queries now go through data_sources.query(data_source_id=...).
+    # The data_source_id is DIFFERENT from the database_id — extract it first.
+    try:
+        datasource_id = _get_datasource_id(client, db_id)
+    except (APIResponseError, ValueError) as e:
+        stats["errors"].append(
+            f"Não foi possível acessar o database de Clientes: {e}. "
+            "Verifique se o ID está correto e se a integração tem acesso."
+        )
+        return stats
+
     start_cursor = None
 
     while True:
-        kwargs = {"database_id": db_id, "page_size": 100}
+        kwargs: dict = {"data_source_id": datasource_id, "page_size": 100}
         if start_cursor:
             kwargs["start_cursor"] = start_cursor
 
-        response = _retry_on_429(client.databases.query, **kwargs)
+        response = _retry_on_429(client.data_sources.query, **kwargs)
 
         for page in response["results"]:
             page_id = page["id"]
@@ -298,16 +406,38 @@ def push_to_notion(
     """Push SQLite clients without notion_page_id to Notion.
 
     Additive only — never overwrites existing Notion records.
+    Uses pages.create(parent={"database_id": db_id}) which still accepts the
+    standard database_id (not data_source_id) in notion-client v3.
+
+    Returns stats dict with created, skipped, errors, total keys.
     """
     client = _get_client(token)
     all_clients = get_all_clients(conn, ativo_only=False)
+    already_synced = [c for c in all_clients if c.get("notion_page_id")]
     to_push = [c for c in all_clients if not c.get("notion_page_id")]
 
-    stats = {"created": 0, "errors": []}
+    stats = {
+        "created": 0,
+        "skipped": len(already_synced),
+        "total": len(all_clients),
+        "errors": [],
+    }
+
+    _log.info(
+        "notion_push_start",
+        total=stats["total"],
+        to_push=len(to_push),
+        already_synced=stats["skipped"],
+    )
 
     for row in to_push:
         try:
             props = _build_notion_properties(row)
+            if not props:
+                error_msg = f"Client {row['id']} ({row.get('nome', '?')}): no properties to push"
+                stats["errors"].append(error_msg)
+                _log.warning("notion_push_skip_empty", client_id=row["id"])
+                continue
             page = _retry_on_429(
                 client.pages.create,
                 parent={"database_id": db_id},
@@ -315,6 +445,7 @@ def push_to_notion(
             )
             update_client(conn, row["id"], {"notion_page_id": page["id"]})
             stats["created"] += 1
+            _log.info("notion_push_ok", client_id=row["id"], page_id=page["id"])
         except Exception as e:
             error_msg = f"Client {row['id']} ({row.get('nome', '?')}): {e}"
             stats["errors"].append(error_msg)
