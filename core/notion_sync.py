@@ -13,6 +13,7 @@ from db.queries import (
     get_client_by_notion_page_id,
     get_client_by_whatsapp,
     get_setting,
+    reset_clients_notion_page_ids,
     set_setting,
     update_client,
 )
@@ -256,6 +257,15 @@ def initialize_notion_databases(
         clients_datasource_id = _extract_datasource_id(new_db)
         # Save ID immediately — so it's never lost even if schema update fails below
         set_setting(conn, "notion_clients_db_id", clients_db_id)
+        # New DB → old notion_page_id values in SQLite are now invalid; clear them
+        # so push_to_notion picks up all clients for re-upload.
+        reset_count = reset_clients_notion_page_ids(conn)
+        if reset_count:
+            warnings.append(
+                f"Estado de sincronização resetado: {reset_count} cliente(s) "
+                "marcado(s) para re-envio ao Notion."
+            )
+        _log.info("notion_clients_sync_reset", count=reset_count)
         # Step 2: apply full schema via data_sources.update
         non_title = {k: v for k, v in _PROPERTY_SCHEMAS.items() if "title" not in v}
         _update_db_properties(client, clients_db_id, non_title, db_obj=new_db)

@@ -211,7 +211,7 @@ if saved_token:
     st.divider()
     st.caption("🔧 Manutenção de schema")
 
-    col_reinit, col_clear = st.columns(2)
+    col_reinit, col_clear, col_reset = st.columns(3)
 
     with col_reinit:
         reinit_disabled = not saved_parent
@@ -259,4 +259,20 @@ if saved_token:
             finally:
                 conn.close()
             st.success("IDs limpos. Preencha a página pai e clique em Salvar para recriar os databases.")
+            st.rerun()
+
+    with col_reset:
+        if st.button(
+            "🔄 Limpar estado de sincronização",
+            use_container_width=True,
+            help="Reseta notion_page_id de todos os clientes — o próximo Push vai reenviar tudo ao Notion",
+        ):
+            conn = get_conn()
+            try:
+                from db.queries import reset_clients_notion_page_ids
+                count = reset_clients_notion_page_ids(conn)
+            finally:
+                conn.close()
+            st.success(f"Estado resetado: {count} cliente(s) prontos para re-envio ao Notion.")
+            st.cache_data.clear()
             st.rerun()

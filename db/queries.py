@@ -66,6 +66,21 @@ def archive_client(conn: sqlite3.Connection, client_id: int) -> None:
     conn.commit()
 
 
+def reset_clients_notion_page_ids(conn: sqlite3.Connection) -> int:
+    """Clear notion_page_id from all clients.
+
+    Use when the Clientes database is recreated in Notion — old page IDs are now
+    invalid and must be cleared so push_to_notion re-creates the rows.
+    Returns the number of rows updated.
+    """
+    cur = conn.execute(
+        "UPDATE clients SET notion_page_id = NULL WHERE notion_page_id IS NOT NULL"
+    )
+    conn.commit()
+    return cur.rowcount
+
+
+
 def get_clients_by_list(conn: sqlite3.Connection, list_id: int) -> list[dict]:
     sql = """
         SELECT c.* FROM clients c
