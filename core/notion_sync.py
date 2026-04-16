@@ -51,10 +51,11 @@ _PROPERTY_SCHEMAS = {
     "Notas":      {"rich_text": {}},
 }
 
-# Notion property schema definitions for Reuniões database
-# "Contatos" is the title/index field (Atr1). Created by renaming default "Name".
-_MEETINGS_PROPERTY_SCHEMAS = {
-    "Contatos":       {"title": {}},       # Atr1 — index (renamed from default "Name")
+# Notion property schema for Reuniões database (for reference only).
+# "Contatos" is a RELATION to the Clientes DB — the actual database_id is injected
+# dynamically in initialize_notion_databases since it depends on clients_db_id.
+# "Título" is the title/index field.
+_MEETINGS_NON_RELATION_SCHEMAS = {
     "Data":           {"date": {}},        # Atr2
     "Empresas":       {"rich_text": {}},   # Atr3
     "Bloco de notas": {"rich_text": {}},   # Atr4 — free-text block
@@ -262,20 +263,46 @@ def initialize_notion_databases(
     if meetings_db_id:
         try:
             db = _retry_on_429(client.databases.retrieve, database_id=meetings_db_id)
-            existing = set(db.get("properties", {}).keys())
-            props_to_update: dict = {}
-            # Rename the default "Name" title → "Contatos" if not done yet
-            if "Name" in existing and "Contatos" not in existing:
-                props_to_update["Name"] = {"name": "Contatos", "title": {}}
-            # Add any missing non-title columns
-            for k, v in _MEETINGS_PROPERTY_SCHEMAS.items():
-                if k not in existing and "title" not in v:
-                    props_to_update[k] = v
-            if props_to_update:
-                _update_db_properties(client, meetings_db_id, props_to_update, db_obj=db)
-                _log.info("notion_meetings_db_updated", added=list(props_to_update.keys()))
+            existing_props = db.get("properties", {})
+            existing = set(existing_props.keys())
+
+            # Pass 1 — Rename the current title property to "Título" if needed.
+            # The title could be "Name" (default), "Contatos" (old fix), or already "Título".
+            # We must rename BEFORE adding the new "Contatos" relation because JSON keys
+            # are unique — we can't rename "Contatos" and add a new "Contatos" in one call.
+            current_title = next(
+                (name for name, prop in existing_props.items() if prop.get("type") == "title"),
+                None,
+            )
+            if current_title and current_title != "Título":
+                _update_db_properties(
+                    client, meetings_db_id,
+                    {current_title: {"name": "Título", "title": {}}},
+                    db_obj=db,
+                )
+                existing.discard(current_title)
+                existing.add("Título")
+                _log.info("notion_meetings_title_renamed", old=current_title, new="Título")
+
+            # Pass 2 — Add missing columns (Contatos relation + others).
+            # "Contatos" must be a relation to the Clientes DB, not a plain text field.
+            add_props: dict = {}
+            contatos_prop = existing_props.get("Contatos", {})
+            if contatos_prop.get("type") != "relation":
+                # Either missing or wrong type — add/replace as relation.
+                add_props["Contatos"] = {
+                    "relation": {"database_id": clients_db_id}
+                }
+            for col, schema in _MEETINGS_NON_RELATION_SCHEMAS.items():
+                if col not in existing:
+                    add_props[col] = schema
+
+            if add_props:
+                _update_db_properties(client, meetings_db_id, add_props, db_obj=db)
+                _log.info("notion_meetings_db_updated", added=list(add_props.keys()))
             else:
                 _log.info("notion_meetings_db_validated", db_id=meetings_db_id)
+
         except APIResponseError:
             _log.warning("notion_meetings_db_stale", db_id=meetings_db_id)
             warnings.append(
@@ -285,16 +312,18 @@ def initialize_notion_databases(
             meetings_db_id = None  # fall through to creation
 
     if not meetings_db_id:
-        # Step 1: create bare database
+        # Step 1: create bare database (gets default "Name" title)
         new_db = _retry_on_429(
             client.databases.create,
             parent={"type": "page_id", "page_id": parent_page_id},
             title=[{"type": "text", "text": {"content": "Reuniões"}}],
         )
         meetings_db_id = new_db["id"]
-        # Step 2: rename default "Name" → "Contatos" AND add other columns in one call
+        # Step 2: rename "Name" → "Título" AND add Contatos relation + other columns.
+        # "Name" ≠ "Contatos" so this can be done in a single call (no duplicate keys).
         meetings_update = {
-            "Name":           {"name": "Contatos", "title": {}},  # rename default title
+            "Name":           {"name": "Título", "title": {}},            # rename title
+            "Contatos":       {"relation": {"database_id": clients_db_id}},  # link to Clientes
             "Data":           {"date": {}},
             "Empresas":       {"rich_text": {}},
             "Bloco de notas": {"rich_text": {}},
