@@ -57,9 +57,11 @@ _PROPERTY_SCHEMAS = {
 # dynamically in initialize_notion_databases since it depends on clients_db_id.
 # "Título" is the title/index field.
 _MEETINGS_NON_RELATION_SCHEMAS = {
-    "Data":           {"date": {}},        # Atr2
-    "Empresas":       {"rich_text": {}},   # Atr3
-    "Bloco de notas": {"rich_text": {}},   # Atr4 — free-text block
+    "Data":           {"date": {}},          # Atr2
+    "Empresas":       {"select": {}},        # Atr3 — select (single choice)
+    "Tipo":           {"select": {}},        # Atr4 — select (single choice)
+    "Tags":           {"multi_select": {}},  # Atr5 — multi-select
+    "Bloco de notas": {"rich_text": {}},     # Atr6 — free-text block
 }
 
 
@@ -312,21 +314,37 @@ def initialize_notion_databases(
                 existing.add("Título")
                 _log.info("notion_meetings_title_renamed", old=current_title, new="Título")
 
-            # Pass 2 — Add missing columns (Contatos relation + others).
-            # "Contatos" must be a relation to the Clientes DB, not a plain text field.
+            # Pass 2 — Add missing or wrong-type columns.
+            # "Contatos" must be a relation; "Empresas" must be select (not rich_text).
+            # Notion does not allow changing a property type in-place — to fix a wrong
+            # type we must delete the old property (set it to null) and re-add it.
             add_props: dict = {}
+            delete_props: dict = {}
+
             contatos_prop = existing_props.get("Contatos", {})
             if contatos_prop.get("type") != "relation":
-                # Either missing or wrong type — add/replace as relation.
                 add_props["Contatos"] = _clients_relation
-            for col, schema in _MEETINGS_NON_RELATION_SCHEMAS.items():
-                if col not in existing:
-                    add_props[col] = schema
 
+            for col, schema in _MEETINGS_NON_RELATION_SCHEMAS.items():
+                existing_prop = existing_props.get(col)
+                if existing_prop is None:
+                    # Missing — add it
+                    add_props[col] = schema
+                else:
+                    expected_type = next(iter(schema))  # e.g. "select", "multi_select"
+                    if existing_prop.get("type") != expected_type:
+                        # Wrong type — delete old, then re-add with correct type.
+                        # Deletion and addition must be separate API calls.
+                        delete_props[col] = None
+                        add_props[col] = schema
+
+            if delete_props:
+                _update_db_properties(client, meetings_db_id, delete_props, db_obj=db)
+                _log.info("notion_meetings_props_deleted", deleted=list(delete_props.keys()))
             if add_props:
                 _update_db_properties(client, meetings_db_id, add_props, db_obj=db)
                 _log.info("notion_meetings_db_updated", added=list(add_props.keys()))
-            else:
+            if not delete_props and not add_props:
                 _log.info("notion_meetings_db_validated", db_id=meetings_db_id)
 
         except APIResponseError:
@@ -353,7 +371,9 @@ def initialize_notion_databases(
             "Name":           {"name": "Título", "title": {}},  # rename default title
             "Contatos":       _clients_relation,                 # relation to Clientes
             "Data":           {"date": {}},
-            "Empresas":       {"rich_text": {}},
+            "Empresas":       {"select": {}},
+            "Tipo":           {"select": {}},
+            "Tags":           {"multi_select": {}},
             "Bloco de notas": {"rich_text": {}},
         }
         _update_db_properties(client, meetings_db_id, meetings_update, db_obj=new_db)
