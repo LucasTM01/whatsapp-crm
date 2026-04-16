@@ -254,20 +254,28 @@ def initialize_notion_databases(
         )
         clients_db_id = new_db["id"]
         clients_datasource_id = _extract_datasource_id(new_db)
+        # Save ID immediately — so it's never lost even if schema update fails below
+        set_setting(conn, "notion_clients_db_id", clients_db_id)
         # Step 2: apply full schema via data_sources.update
         non_title = {k: v for k, v in _PROPERTY_SCHEMAS.items() if "title" not in v}
         _update_db_properties(client, clients_db_id, non_title, db_obj=new_db)
         _log.info("notion_clients_db_created", db_id=clients_db_id)
+    else:
+        set_setting(conn, "notion_clients_db_id", clients_db_id)
 
     # Ensure we always have the data_source_id for the relation (fallback retrieve)
     if not clients_datasource_id:
         clients_datasource_id = _get_datasource_id(client, clients_db_id)
 
-    set_setting(conn, "notion_clients_db_id", clients_db_id)
-
-    # In Notion API v3, relation properties require data_source_id (NOT database_id).
-    # The data_source_id is different from the database_id.
-    _clients_relation = {"relation": {"data_source_id": clients_datasource_id}}
+    # In Notion API v3, relation properties require data_source_id (NOT database_id)
+    # AND must specify either single_property (one-way) or dual_property (two-way).
+    # single_property: Reuniões → Clientes only (no reverse column on Clientes).
+    _clients_relation = {
+        "relation": {
+            "data_source_id": clients_datasource_id,
+            "single_property": {},
+        }
+    }
 
     # --- Meetings database ---
     if meetings_db_id:
@@ -327,6 +335,8 @@ def initialize_notion_databases(
             title=[{"type": "text", "text": {"content": "Reuniões"}}],
         )
         meetings_db_id = new_db["id"]
+        # Save ID immediately — so it's never lost even if schema update fails below
+        set_setting(conn, "notion_meetings_db_id", meetings_db_id)
         # Step 2: rename "Name" → "Título" AND add Contatos relation + other columns.
         # "Name" ≠ "Contatos" so this can be done in a single call (no duplicate keys).
         meetings_update = {
@@ -338,8 +348,8 @@ def initialize_notion_databases(
         }
         _update_db_properties(client, meetings_db_id, meetings_update, db_obj=new_db)
         _log.info("notion_meetings_db_created", db_id=meetings_db_id)
-
-    set_setting(conn, "notion_meetings_db_id", meetings_db_id)
+    else:
+        set_setting(conn, "notion_meetings_db_id", meetings_db_id)
 
     return {
         "clients_db_id": clients_db_id,

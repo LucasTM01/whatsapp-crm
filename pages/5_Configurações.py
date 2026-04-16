@@ -111,6 +111,7 @@ if submitted:
                         st.rerun()
                     except Exception as exc:
                         st.error(f"Erro ao inicializar databases: {exc}")
+                        st.rerun()  # reload so any partially-saved IDs appear in the form
             else:
                 # Just save the provided IDs
                 conn = get_conn()
@@ -243,6 +244,7 @@ if saved_token:
                     st.rerun()
                 except Exception as exc:
                     st.error(f"Erro ao reinicializar schemas: {exc}")
+                    st.rerun()  # reload so any partially-saved IDs appear in the form
 
     with col_clear:
         if st.button(
