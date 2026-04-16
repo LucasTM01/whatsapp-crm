@@ -30,8 +30,8 @@ PROPERTY_MAP = {
     "nome":      ("Name",       "title"),
     "whatsapp":  ("WhatsApp",   "rich_text"),
     "email":     ("Email",      "email"),
-    "empresa":   ("Empresa",    "rich_text"),
-    "tickers":   ("Tickers",    "rich_text"),
+    "empresa":   ("Empresa",    "select"),        # single-select in Notion
+    "tickers":   ("Tickers",    "multi_select"),  # multi-select; stored as CSV in SQLite
     "tipo":      ("Cargo",      "rich_text"),
     "tier":      ("Tier",       "number"),
     "freq_dias": ("Frequência", "number"),
@@ -44,8 +44,8 @@ _PROPERTY_SCHEMAS = {
     "Name":       {"title": {}},
     "WhatsApp":   {"rich_text": {}},
     "Email":      {"email": {}},
-    "Empresa":    {"rich_text": {}},
-    "Tickers":    {"rich_text": {}},
+    "Empresa":    {"select": {}},
+    "Tickers":    {"multi_select": {}},
     "Cargo":      {"rich_text": {}},
     "Tier":       {"number": {}},
     "Frequência": {"number": {}},
@@ -135,7 +135,13 @@ def _update_db_properties(
 
 
 def _build_notion_properties(client_row: dict) -> dict:
-    """Convert a SQLite client dict into Notion page properties."""
+    """Convert a SQLite client dict into Notion page properties.
+
+    SQLite storage conventions:
+    - empresa  : plain string  → Notion select  (single option)
+    - tickers  : CSV string    → Notion multi_select (one option per ticker)
+                 e.g. "PETR4, VALE3" → [{"name": "PETR4"}, {"name": "VALE3"}]
+    """
     props = {}
     for col, (notion_name, prop_type) in PROPERTY_MAP.items():
         val = client_row.get(col)
@@ -152,11 +158,25 @@ def _build_notion_properties(client_row: dict) -> dict:
                 props[notion_name] = {"number": int(val)}
             except (ValueError, TypeError):
                 pass
+        elif prop_type == "select":
+            name = str(val).strip()
+            if name:
+                props[notion_name] = {"select": {"name": name}}
+        elif prop_type == "multi_select":
+            # Split CSV, strip whitespace, drop empty tokens, uppercase each ticker
+            options = [t.strip().upper() for t in str(val).split(",") if t.strip()]
+            if options:
+                props[notion_name] = {"multi_select": [{"name": o} for o in options]}
     return props
 
 
 def _parse_notion_properties(properties: dict) -> dict:
-    """Extract SQLite column values from a Notion page's properties dict."""
+    """Extract SQLite column values from a Notion page's properties dict.
+
+    Notion → SQLite storage conventions:
+    - select       → plain string  (option name)
+    - multi_select → CSV string    (option names joined by ", ")
+    """
     data = {}
     for col, (notion_name, prop_type) in PROPERTY_MAP.items():
         prop = properties.get(notion_name)
@@ -172,6 +192,12 @@ def _parse_notion_properties(properties: dict) -> dict:
             data[col] = prop.get("email")
         elif prop_type == "number":
             data[col] = prop.get("number")
+        elif prop_type == "select":
+            option = prop.get("select")
+            data[col] = option["name"] if option else None
+        elif prop_type == "multi_select":
+            options = prop.get("multi_select", [])
+            data[col] = ", ".join(o["name"] for o in options) if options else None
     return data
 
 
@@ -233,12 +259,29 @@ def initialize_notion_databases(
         try:
             db = _retry_on_429(client.databases.retrieve, database_id=clients_db_id)
             clients_datasource_id = _extract_datasource_id(db)
-            existing = set(db.get("properties", {}).keys())
-            missing_props = {k: v for k, v in _PROPERTY_SCHEMAS.items() if k not in existing}
-            if missing_props:
-                _update_db_properties(client, clients_db_id, missing_props, db_obj=db)
-                _log.info("notion_clients_db_updated", added=list(missing_props.keys()))
-            else:
+            existing_props = db.get("properties", {})
+            existing = set(existing_props.keys())
+
+            delete_props: dict = {}
+            add_props: dict = {}
+            for notion_name, schema in _PROPERTY_SCHEMAS.items():
+                existing_prop = existing_props.get(notion_name)
+                if existing_prop is None:
+                    add_props[notion_name] = schema
+                else:
+                    expected_type = next(iter(schema))
+                    if existing_prop.get("type") != expected_type and expected_type != "title":
+                        # Wrong type — delete old, re-add with correct type
+                        delete_props[notion_name] = None
+                        add_props[notion_name] = schema
+
+            if delete_props:
+                _update_db_properties(client, clients_db_id, delete_props, db_obj=db)
+                _log.info("notion_clients_props_deleted", deleted=list(delete_props.keys()))
+            if add_props:
+                _update_db_properties(client, clients_db_id, add_props, db_obj=db)
+                _log.info("notion_clients_db_updated", added=list(add_props.keys()))
+            if not delete_props and not add_props:
                 _log.info("notion_clients_db_validated", db_id=clients_db_id)
         except APIResponseError:
             _log.warning("notion_clients_db_stale", db_id=clients_db_id)
