@@ -197,8 +197,6 @@ def initialize_notion_databases(
             "Contatos": {
                 "relation": {
                     "database_id": clients_db_id,
-                    "type": "dual_property",
-                    "dual_property": {},
                 },
             },
             "Data": {"date": {}},

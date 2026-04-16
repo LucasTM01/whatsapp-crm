@@ -4,6 +4,7 @@ from datetime import datetime, timezone as _tz
 import pandas as pd
 import streamlit as st
 
+from core.notion_sync import pull_from_notion, push_to_notion
 from core.sender import normalize_phone
 from db import get_conn
 from db.queries import (
@@ -13,6 +14,7 @@ from db.queries import (
     get_all_lists,
     get_clients_by_filters,
     get_last_contact_per_client,
+    get_setting,
     update_client,
 )
 
@@ -65,6 +67,47 @@ def _load_lists():
 # ---------------------------------------------------------------------------
 
 with st.sidebar:
+    # ── Notion sync ──────────────────────────────────────────────────────────
+    _conn = get_conn()
+    try:
+        _notion_token = get_setting(_conn, "notion_token")
+        _notion_db = get_setting(_conn, "notion_clients_db_id")
+    finally:
+        _conn.close()
+
+    if _notion_token and _notion_db:
+        st.markdown("### Notion")
+        _col1, _col2 = st.columns(2)
+        if _col1.button("⬇ Pull", use_container_width=True, help="Puxar clientes do Notion"):
+            with st.spinner("Puxando do Notion..."):
+                _conn = get_conn()
+                try:
+                    _stats = pull_from_notion(_conn, _notion_token, _notion_db)
+                finally:
+                    _conn.close()
+            st.cache_data.clear()
+            st.toast(
+                f"Pull: {_stats['created']} criados, {_stats['updated']} atualizados"
+                + (f", {len(_stats['errors'])} erros" if _stats["errors"] else ""),
+                icon="✅" if not _stats["errors"] else "⚠️",
+            )
+            st.rerun()
+        if _col2.button("⬆ Push", use_container_width=True, help="Enviar clientes ao Notion"):
+            with st.spinner("Enviando ao Notion..."):
+                _conn = get_conn()
+                try:
+                    _stats = push_to_notion(_conn, _notion_token, _notion_db)
+                finally:
+                    _conn.close()
+            st.cache_data.clear()
+            st.toast(
+                f"Push: {_stats['created']} enviados"
+                + (f", {len(_stats['errors'])} erros" if _stats["errors"] else ""),
+                icon="✅" if not _stats["errors"] else "⚠️",
+            )
+            st.rerun()
+        st.divider()
+
     st.markdown("### Filtros")
     f_tier = st.selectbox("Tier", options=[None] + TIER_OPTIONS, format_func=lambda x: "Todos" if x is None else TIER_DISPLAY.get(x, str(x)))
     f_tipo = st.text_input("Cargo", placeholder="ex: Analista, PM, Head...")

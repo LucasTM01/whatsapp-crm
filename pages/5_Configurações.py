@@ -106,6 +106,7 @@ if submitted:
                             f"- Clientes: `{result['clients_db_id']}`\n"
                             f"- Reuniões: `{result['meetings_db_id']}`"
                         )
+                        st.rerun()
                     except Exception as exc:
                         st.error(f"Erro ao inicializar databases: {exc}")
             else:
@@ -117,8 +118,7 @@ if submitted:
                 finally:
                     conn.close()
                 st.success("Configurações salvas.")
-
-            st.rerun()
+                st.rerun()
 
 
 # ---------------------------------------------------------------------------
