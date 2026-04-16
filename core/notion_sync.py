@@ -1,0 +1,326 @@
+"""Notion <-> SQLite sync logic for clients and meetings databases."""
+
+import sqlite3
+import time
+
+from notion_client import Client
+from notion_client.errors import APIResponseError
+
+from core.logger import get_logger
+from db.queries import (
+    create_client,
+    get_all_clients,
+    get_client_by_notion_page_id,
+    get_client_by_whatsapp,
+    get_setting,
+    set_setting,
+    update_client,
+)
+
+_log = get_logger(__name__)
+
+MAX_RETRIES = 3
+
+# ---------------------------------------------------------------------------
+# Property mapping: SQLite column -> (Notion property name, Notion type)
+# ---------------------------------------------------------------------------
+
+PROPERTY_MAP = {
+    "nome":      ("Name",       "title"),
+    "whatsapp":  ("WhatsApp",   "rich_text"),
+    "email":     ("Email",      "email"),
+    "empresa":   ("Empresa",    "rich_text"),
+    "tickers":   ("Tickers",    "rich_text"),
+    "tipo":      ("Cargo",      "rich_text"),
+    "tier":      ("Tier",       "number"),
+    "freq_dias": ("Frequência", "number"),
+    "notas":     ("Notas",      "rich_text"),
+}
+
+# Notion property schema definitions for database creation
+_PROPERTY_SCHEMAS = {
+    "Name":       {"title": {}},
+    "WhatsApp":   {"rich_text": {}},
+    "Email":      {"email": {}},
+    "Empresa":    {"rich_text": {}},
+    "Tickers":    {"rich_text": {}},
+    "Cargo":      {"rich_text": {}},
+    "Tier":       {"number": {}},
+    "Frequência": {"number": {}},
+    "Notas":      {"rich_text": {}},
+}
+
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+def _retry_on_429(fn, *args, **kwargs):
+    """Execute fn with exponential backoff on 429 rate-limit errors."""
+    for attempt in range(MAX_RETRIES + 1):
+        try:
+            return fn(*args, **kwargs)
+        except APIResponseError as e:
+            if e.status == 429 and attempt < MAX_RETRIES:
+                wait = 2 ** (attempt + 1)
+                _log.warning("rate_limited", retry_in=wait)
+                time.sleep(wait)
+            else:
+                raise
+
+
+def _get_client(token: str) -> Client:
+    return Client(auth=token)
+
+
+def _build_notion_properties(client_row: dict) -> dict:
+    """Convert a SQLite client dict into Notion page properties."""
+    props = {}
+    for col, (notion_name, prop_type) in PROPERTY_MAP.items():
+        val = client_row.get(col)
+        if val is None:
+            continue
+        if prop_type == "title":
+            props[notion_name] = {"title": [{"text": {"content": str(val)}}]}
+        elif prop_type == "rich_text":
+            props[notion_name] = {"rich_text": [{"text": {"content": str(val)}}]}
+        elif prop_type == "email":
+            props[notion_name] = {"email": str(val)}
+        elif prop_type == "number":
+            try:
+                props[notion_name] = {"number": int(val)}
+            except (ValueError, TypeError):
+                pass
+    return props
+
+
+def _parse_notion_properties(properties: dict) -> dict:
+    """Extract SQLite column values from a Notion page's properties dict."""
+    data = {}
+    for col, (notion_name, prop_type) in PROPERTY_MAP.items():
+        prop = properties.get(notion_name)
+        if not prop:
+            continue
+        if prop_type == "title":
+            items = prop.get("title", [])
+            data[col] = items[0]["plain_text"] if items else None
+        elif prop_type == "rich_text":
+            items = prop.get("rich_text", [])
+            data[col] = items[0]["plain_text"] if items else None
+        elif prop_type == "email":
+            data[col] = prop.get("email")
+        elif prop_type == "number":
+            data[col] = prop.get("number")
+    return data
+
+
+# ---------------------------------------------------------------------------
+# Credential validation
+# ---------------------------------------------------------------------------
+
+def validate_notion_credentials(token: str) -> bool:
+    """Test if a Notion token is valid by calling users.me()."""
+    try:
+        client = _get_client(token)
+        _retry_on_429(client.users.me)
+        return True
+    except Exception:
+        return False
+
+
+# ---------------------------------------------------------------------------
+# Database initialization
+# ---------------------------------------------------------------------------
+
+def ensure_database_schema(token: str, db_id: str) -> tuple[bool, list[str]]:
+    """Check that the Notion database has the expected properties.
+
+    Returns (ok, list_of_missing_properties).
+    """
+    client = _get_client(token)
+    db = _retry_on_429(client.databases.retrieve, database_id=db_id)
+    existing_props = set(db.get("properties", {}).keys())
+    required = {notion_name for _, (notion_name, _) in PROPERTY_MAP.items()}
+    missing = required - existing_props
+    return (len(missing) == 0, sorted(missing))
+
+
+def initialize_notion_databases(
+    conn: sqlite3.Connection,
+    token: str,
+    parent_page_id: str,
+    clients_db_id: str | None = None,
+    meetings_db_id: str | None = None,
+) -> dict:
+    """Check/create Clients and Meetings databases in Notion.
+
+    Returns {"clients_db_id": str, "meetings_db_id": str}.
+    """
+    client = _get_client(token)
+
+    # --- Clients database ---
+    if clients_db_id:
+        # Validate and add missing properties
+        db = _retry_on_429(client.databases.retrieve, database_id=clients_db_id)
+        existing = set(db.get("properties", {}).keys())
+        missing_props = {}
+        for notion_name, schema in _PROPERTY_SCHEMAS.items():
+            if notion_name not in existing:
+                missing_props[notion_name] = schema
+        if missing_props:
+            _retry_on_429(
+                client.databases.update,
+                database_id=clients_db_id,
+                properties=missing_props,
+            )
+            _log.info("notion_clients_db_updated", added=list(missing_props.keys()))
+    else:
+        # Create new Clients database
+        new_db = _retry_on_429(
+            client.databases.create,
+            parent={"type": "page_id", "page_id": parent_page_id},
+            title=[{"type": "text", "text": {"content": "Clientes"}}],
+            properties=_PROPERTY_SCHEMAS,
+        )
+        clients_db_id = new_db["id"]
+        _log.info("notion_clients_db_created", db_id=clients_db_id)
+
+    set_setting(conn, "notion_clients_db_id", clients_db_id)
+
+    # --- Meetings database ---
+    if meetings_db_id:
+        _retry_on_429(client.databases.retrieve, database_id=meetings_db_id)
+        _log.info("notion_meetings_db_validated", db_id=meetings_db_id)
+    else:
+        meetings_props = {
+            "Nome": {"title": {}},
+            "Contatos": {
+                "relation": {
+                    "database_id": clients_db_id,
+                    "type": "dual_property",
+                    "dual_property": {},
+                },
+            },
+            "Data": {"date": {}},
+            "Empresas": {"rich_text": {}},
+        }
+        new_db = _retry_on_429(
+            client.databases.create,
+            parent={"type": "page_id", "page_id": parent_page_id},
+            title=[{"type": "text", "text": {"content": "Reuniões"}}],
+            properties=meetings_props,
+        )
+        meetings_db_id = new_db["id"]
+        _log.info("notion_meetings_db_created", db_id=meetings_db_id)
+
+    set_setting(conn, "notion_meetings_db_id", meetings_db_id)
+
+    return {"clients_db_id": clients_db_id, "meetings_db_id": meetings_db_id}
+
+
+# ---------------------------------------------------------------------------
+# Pull: Notion -> SQLite
+# ---------------------------------------------------------------------------
+
+def pull_from_notion(
+    conn: sqlite3.Connection,
+    token: str,
+    db_id: str,
+) -> dict:
+    """Pull all pages from a Notion clients database into SQLite.
+
+    Matching: notion_page_id first, then whatsapp fallback.
+    Conflict: Notion always overwrites SQLite.
+    """
+    client = _get_client(token)
+    stats = {"created": 0, "updated": 0, "skipped": 0, "errors": []}
+    start_cursor = None
+
+    while True:
+        kwargs = {"database_id": db_id, "page_size": 100}
+        if start_cursor:
+            kwargs["start_cursor"] = start_cursor
+
+        response = _retry_on_429(client.databases.query, **kwargs)
+
+        for page in response["results"]:
+            page_id = page["id"]
+            try:
+                data = _parse_notion_properties(page["properties"])
+
+                if not data.get("nome"):
+                    stats["skipped"] += 1
+                    continue
+
+                # Match existing client
+                existing = get_client_by_notion_page_id(conn, page_id)
+                if not existing and data.get("whatsapp"):
+                    existing = get_client_by_whatsapp(conn, data["whatsapp"])
+
+                if existing:
+                    data["notion_page_id"] = page_id
+                    update_client(conn, existing["id"], data)
+                    stats["updated"] += 1
+                else:
+                    if not data.get("whatsapp"):
+                        stats["skipped"] += 1
+                        _log.warning("notion_pull_skip", reason="no_whatsapp", page_id=page_id)
+                        continue
+                    data["notion_page_id"] = page_id
+                    create_client(conn, data)
+                    stats["created"] += 1
+            except Exception as e:
+                error_msg = f"Page {page_id}: {e}"
+                stats["errors"].append(error_msg)
+                _log.error("notion_pull_error", page_id=page_id, error=str(e))
+
+        if not response.get("has_more"):
+            break
+        start_cursor = response.get("next_cursor")
+
+    _log.info(
+        "notion_pull_complete",
+        created=stats["created"],
+        updated=stats["updated"],
+        skipped=stats["skipped"],
+        errors=len(stats["errors"]),
+    )
+    return stats
+
+
+# ---------------------------------------------------------------------------
+# Push: SQLite -> Notion
+# ---------------------------------------------------------------------------
+
+def push_to_notion(
+    conn: sqlite3.Connection,
+    token: str,
+    db_id: str,
+) -> dict:
+    """Push SQLite clients without notion_page_id to Notion.
+
+    Additive only — never overwrites existing Notion records.
+    """
+    client = _get_client(token)
+    all_clients = get_all_clients(conn, ativo_only=False)
+    to_push = [c for c in all_clients if not c.get("notion_page_id")]
+
+    stats = {"created": 0, "errors": []}
+
+    for row in to_push:
+        try:
+            props = _build_notion_properties(row)
+            page = _retry_on_429(
+                client.pages.create,
+                parent={"database_id": db_id},
+                properties=props,
+            )
+            update_client(conn, row["id"], {"notion_page_id": page["id"]})
+            stats["created"] += 1
+        except Exception as e:
+            error_msg = f"Client {row['id']} ({row.get('nome', '?')}): {e}"
+            stats["errors"].append(error_msg)
+            _log.error("notion_push_error", client_id=row["id"], error=str(e))
+
+    _log.info("notion_push_complete", created=stats["created"], errors=len(stats["errors"]))
+    return stats

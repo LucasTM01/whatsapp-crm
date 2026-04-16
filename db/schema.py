@@ -51,10 +51,24 @@ CREATE INDEX IF NOT EXISTS idx_clients_ativo
 
 CREATE INDEX IF NOT EXISTS idx_message_log_client_status
     ON message_log(client_id, status);
+
+CREATE TABLE IF NOT EXISTS settings (
+    key   TEXT PRIMARY KEY,
+    value TEXT
+);
 """
+
+
+def _add_column_if_missing(conn, table: str, column: str, col_type: str) -> None:
+    """SQLite lacks IF NOT EXISTS for ALTER TABLE ADD COLUMN."""
+    cols = {row[1] for row in conn.execute(f"PRAGMA table_info({table})").fetchall()}
+    if column not in cols:
+        conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {col_type}")
+        conn.commit()
 
 
 def init_db() -> None:
     conn = get_conn()
     conn.executescript(SCHEMA_SQL)
+    _add_column_if_missing(conn, "clients", "notion_page_id", "TEXT")
     conn.close()

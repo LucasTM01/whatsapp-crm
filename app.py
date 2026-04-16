@@ -28,6 +28,41 @@ st.set_page_config(
 def initialize():
     setup_logging()
     init_db()
+    _auto_pull_notion()
+
+
+def _auto_pull_notion():
+    """Silently pull from Notion if credentials are configured."""
+    from core.logger import get_logger
+    log = get_logger(__name__)
+
+    conn = get_conn()
+    try:
+        from db.queries import get_setting
+        token = get_setting(conn, "notion_token")
+        db_id = get_setting(conn, "notion_clients_db_id")
+    finally:
+        conn.close()
+
+    if not token or not db_id:
+        return
+
+    try:
+        from core.notion_sync import pull_from_notion
+        conn = get_conn()
+        try:
+            stats = pull_from_notion(conn, token, db_id)
+            log.info(
+                "notion_auto_pull",
+                created=stats["created"],
+                updated=stats["updated"],
+                skipped=stats["skipped"],
+                errors=len(stats["errors"]),
+            )
+        finally:
+            conn.close()
+    except Exception as e:
+        log.error("notion_auto_pull_failed", error=str(e))
 
 
 initialize()

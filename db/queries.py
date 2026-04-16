@@ -31,7 +31,7 @@ def get_client_by_id(conn: sqlite3.Connection, client_id: int) -> dict | None:
 
 
 def create_client(conn: sqlite3.Connection, data: dict) -> int:
-    cols = ["nome", "whatsapp", "email", "empresa", "tickers", "tipo", "tier", "freq_dias", "notas"]
+    cols = ["nome", "whatsapp", "email", "empresa", "tickers", "tipo", "tier", "freq_dias", "notas", "notion_page_id"]
     fields = [c for c in cols if c in data]
     placeholders = ", ".join("?" for _ in fields)
     col_str = ", ".join(fields)
@@ -45,7 +45,7 @@ def create_client(conn: sqlite3.Connection, data: dict) -> int:
 
 
 def update_client(conn: sqlite3.Connection, client_id: int, data: dict) -> None:
-    allowed = ["nome", "whatsapp", "email", "empresa", "tickers", "tipo", "tier", "freq_dias", "notas", "ativo"]
+    allowed = ["nome", "whatsapp", "email", "empresa", "tickers", "tipo", "tier", "freq_dias", "notas", "ativo", "notion_page_id"]
     fields = [k for k in allowed if k in data]
     if not fields:
         return
@@ -228,3 +228,35 @@ def get_last_contact_per_client(conn: sqlite3.Connection) -> dict[int, str]:
         """
     ).fetchall()
     return {row["client_id"]: row["last_sent"] for row in rows}
+
+
+# ---------------------------------------------------------------------------
+# Settings
+# ---------------------------------------------------------------------------
+
+def get_setting(conn: sqlite3.Connection, key: str) -> str | None:
+    row = conn.execute("SELECT value FROM settings WHERE key = ?", (key,)).fetchone()
+    return row["value"] if row else None
+
+
+def set_setting(conn: sqlite3.Connection, key: str, value: str | None) -> None:
+    if value is None:
+        conn.execute("DELETE FROM settings WHERE key = ?", (key,))
+    else:
+        conn.execute(
+            "INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = ?",
+            (key, value, value),
+        )
+    conn.commit()
+
+
+# ---------------------------------------------------------------------------
+# Client lookups for Notion sync
+# ---------------------------------------------------------------------------
+
+def get_client_by_whatsapp(conn: sqlite3.Connection, whatsapp: str) -> dict | None:
+    return _row(conn.execute("SELECT * FROM clients WHERE whatsapp = ?", (whatsapp,)))
+
+
+def get_client_by_notion_page_id(conn: sqlite3.Connection, page_id: str) -> dict | None:
+    return _row(conn.execute("SELECT * FROM clients WHERE notion_page_id = ?", (page_id,)))
