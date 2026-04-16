@@ -223,11 +223,13 @@ def initialize_notion_databases(
     """
     client = _get_client(token)
     warnings: list[str] = []
+    clients_datasource_id: str | None = None  # needed for the Contatos relation
 
     # --- Clients database ---
     if clients_db_id:
         try:
             db = _retry_on_429(client.databases.retrieve, database_id=clients_db_id)
+            clients_datasource_id = _extract_datasource_id(db)
             existing = set(db.get("properties", {}).keys())
             missing_props = {k: v for k, v in _PROPERTY_SCHEMAS.items() if k not in existing}
             if missing_props:
@@ -251,13 +253,21 @@ def initialize_notion_databases(
             title=[{"type": "text", "text": {"content": "Clientes"}}],
         )
         clients_db_id = new_db["id"]
-        # Step 2: apply full schema via data_sources.update using the data_source_id
-        # from the create response — no extra retrieve needed.
+        clients_datasource_id = _extract_datasource_id(new_db)
+        # Step 2: apply full schema via data_sources.update
         non_title = {k: v for k, v in _PROPERTY_SCHEMAS.items() if "title" not in v}
         _update_db_properties(client, clients_db_id, non_title, db_obj=new_db)
         _log.info("notion_clients_db_created", db_id=clients_db_id)
 
+    # Ensure we always have the data_source_id for the relation (fallback retrieve)
+    if not clients_datasource_id:
+        clients_datasource_id = _get_datasource_id(client, clients_db_id)
+
     set_setting(conn, "notion_clients_db_id", clients_db_id)
+
+    # In Notion API v3, relation properties require data_source_id (NOT database_id).
+    # The data_source_id is different from the database_id.
+    _clients_relation = {"relation": {"data_source_id": clients_datasource_id}}
 
     # --- Meetings database ---
     if meetings_db_id:
@@ -290,9 +300,7 @@ def initialize_notion_databases(
             contatos_prop = existing_props.get("Contatos", {})
             if contatos_prop.get("type") != "relation":
                 # Either missing or wrong type — add/replace as relation.
-                add_props["Contatos"] = {
-                    "relation": {"database_id": clients_db_id}
-                }
+                add_props["Contatos"] = _clients_relation
             for col, schema in _MEETINGS_NON_RELATION_SCHEMAS.items():
                 if col not in existing:
                     add_props[col] = schema
@@ -322,8 +330,8 @@ def initialize_notion_databases(
         # Step 2: rename "Name" → "Título" AND add Contatos relation + other columns.
         # "Name" ≠ "Contatos" so this can be done in a single call (no duplicate keys).
         meetings_update = {
-            "Name":           {"name": "Título", "title": {}},            # rename title
-            "Contatos":       {"relation": {"database_id": clients_db_id}},  # link to Clientes
+            "Name":           {"name": "Título", "title": {}},  # rename default title
+            "Contatos":       _clients_relation,                 # relation to Clientes
             "Data":           {"date": {}},
             "Empresas":       {"rich_text": {}},
             "Bloco de notas": {"rich_text": {}},
