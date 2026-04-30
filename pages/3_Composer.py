@@ -351,8 +351,29 @@ with ctrl3:
 if send_clicked:
     st.session_state.composer_sending = True
     st.session_state.composer_results = []
-    recipients = st.session_state.composer_recipients
+    raw_recipients = st.session_state.composer_recipients
     template = st.session_state.composer_template
+
+    # Re-fetch DB-backed recipients so any name/field edits made in Clientes
+    # are reflected here — session state holds stale snapshots from selection time.
+    db_ids = [r["id"] for r in raw_recipients if r.get("id") is not None]
+    if db_ids:
+        conn_refresh = get_conn()
+        try:
+            placeholders = ",".join("?" for _ in db_ids)
+            fresh_rows = conn_refresh.execute(
+                f"SELECT * FROM clients WHERE id IN ({placeholders})",
+                db_ids,
+            ).fetchall()
+            db_map = {row["id"]: dict(row) for row in fresh_rows}
+        finally:
+            conn_refresh.close()
+        recipients = [
+            db_map.get(r["id"], r) if r.get("id") is not None else r
+            for r in raw_recipients
+        ]
+    else:
+        recipients = raw_recipients  # all Excel-only recipients, no DB lookup needed
 
     progress_bar = st.progress(0, text="Iniciando...")
     status_placeholder = st.empty()

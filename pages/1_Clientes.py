@@ -246,22 +246,39 @@ else:
         st.cache_data.clear()
         st.rerun()
 
-    # Archive section — clean per-row layout inside an expander
+    # Archive section — multiselect for bulk archiving
     with st.expander("🗄️ Arquivar clientes"):
         st.caption("Arquivar remove o cliente das listas e do dashboard, mas não apaga seus dados.")
-        for client in clients:
-            a1, a2 = st.columns([5, 1])
-            a1.markdown(f"**{client['nome']}** — {client.get('empresa') or '—'} &nbsp; {TIER_DISPLAY.get(client.get('tier', 2), '')}")
-            if a2.button("Arquivar", key=f"archive_{client['id']}", use_container_width=True):
+        to_archive = st.multiselect(
+            "Selecionar clientes para arquivar",
+            options=clients,
+            format_func=lambda c: (
+                f"{c['nome']} — {c.get('empresa') or '—'} · {TIER_DISPLAY.get(c.get('tier', 2), '')}"
+            ),
+            key="archive_multiselect",
+        )
+        if to_archive:
+            if st.button(
+                f"Arquivar {len(to_archive)} cliente(s) selecionado(s)",
+                type="primary",
+                key="bulk_archive_btn",
+            ):
                 conn = get_conn()
+                archived, errors = 0, []
                 try:
-                    archive_client(conn, client["id"])
-                    st.cache_data.clear()
-                    st.success(f"{client['nome']} arquivado.")
-                except Exception as exc:
-                    st.error(f"Erro ao arquivar: {exc}")
+                    for client in to_archive:
+                        try:
+                            archive_client(conn, client["id"])
+                            archived += 1
+                        except Exception as exc:
+                            errors.append(f"{client['nome']}: {exc}")
                 finally:
                     conn.close()
+                st.cache_data.clear()
+                if archived:
+                    st.success(f"{archived} cliente(s) arquivado(s).")
+                if errors:
+                    st.error("Erros:\n" + "\n".join(f"• {e}" for e in errors))
                 st.rerun()
 
 st.divider()
